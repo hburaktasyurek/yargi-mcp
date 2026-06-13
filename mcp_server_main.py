@@ -21,7 +21,6 @@ import json
 import os
 import time
 from collections import defaultdict
-from functools import partial
 from pydantic import HttpUrl, Field
 from typing import Optional, Dict, List, Literal, Any
 from fastmcp.server.middleware import Middleware, MiddlewareContext
@@ -1583,6 +1582,7 @@ YANLIŞ KULLANIM:
                     data=BedestenSearchData(
                         phrase=keyword,
                         itemTypeList=[court_type],
+                        # Bedesten caps pageSize at 10; max_candidates may be lower.
                         pageSize=min(10, max_candidates),
                         pageNumber=1
                     )
@@ -1782,7 +1782,7 @@ YANLIŞ KULLANIM:
             doc_texts = [doc["text"] for doc in documents_data]
             doc_titles = [doc["metadata"].get("birim_adi", "none") for doc in documents_data]
             doc_embeddings = await asyncio.wait_for(
-                asyncio.to_thread(partial(embedder.encode_documents, doc_texts, titles=doc_titles)),
+                asyncio.to_thread(embedder.encode_documents, doc_texts, titles=doc_titles),
                 timeout=min(embedding_timeout_s, remaining),
             )
         except Exception as e:
