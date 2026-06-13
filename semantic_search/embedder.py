@@ -8,7 +8,8 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
-# OpenRouter defaults (preserve backward compatibility)
+# OpenRouter defaults. Set OPENROUTER_EMBEDDING_MODEL=google/gemini-embedding-001
+# to keep the previous default model.
 DEFAULT_MODEL = "google/gemini-embedding-2"
 DEFAULT_DIMENSION = 3072
 
