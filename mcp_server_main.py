@@ -1404,6 +1404,7 @@ if SEMANTIC_SEARCH_AVAILABLE:
             "fetch_attempted": 0,
             "fetch_succeeded": 0,
             "failed_fetches": 0,
+            "fetch_timeouts": 0,
             "search_ms": 0,
             "fetch_ms_total": 0,
             "embedding_ms": 0,
@@ -1610,12 +1611,10 @@ YANLIŞ KULLANIM:
         decisions_to_process = _round_robin_decisions(grouped_decisions, court_types, max_candidates)
 
         if not decisions_to_process:
-            if diagnostics["timed_out"] or (
-                diagnostics["search_timeouts"] > 0 and diagnostics["search_succeeded"] == 0
-            ):
+            if diagnostics["timed_out"] or diagnostics["search_timeouts"] > 0:
                 return _semantic_response(
                     "partial_timeout",
-                    "All Bedesten search attempts timed out before candidate decisions were collected.",
+                    "One or more Bedesten search attempts timed out before candidate decisions were collected.",
                     diagnostics,
                     start_time,
                     candidates_preview=[],
@@ -1684,6 +1683,7 @@ YANLIŞ KULLANIM:
                         preview["fetch_status"] = "failed"
             except asyncio.TimeoutError:
                 diagnostics["failed_fetches"] += 1
+                diagnostics["fetch_timeouts"] += 1
                 diagnostics["timed_out"] = _semantic_remaining_s(deadline) <= 0
                 if preview is not None:
                     preview["fetch_status"] = "timeout"
@@ -1710,6 +1710,17 @@ YANLIŞ KULLANIM:
             )
 
         if not documents_data:
+            if diagnostics["fetch_timeouts"] > 0:
+                return _semantic_response(
+                    "partial_timeout",
+                    "One or more Bedesten document fetches timed out before any document content could be processed.",
+                    diagnostics,
+                    start_time,
+                    candidates_preview=candidates_preview,
+                    semantic_ranking_skipped=True,
+                    query=query,
+                    initial_keyword=initial_keyword,
+                )
             return _semantic_response(
                 "embedding_error",
                 "No fetched document content could be processed for semantic ranking.",
