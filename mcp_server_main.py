@@ -1598,7 +1598,7 @@ YANLIŞ KULLANIM:
                 logger.info("Semantic search found %s candidates from %s", len(decisions), court_type_name)
             except asyncio.TimeoutError:
                 diagnostics["search_failed"] += 1
-                diagnostics["timed_out"] = True
+                diagnostics["timed_out"] = _semantic_remaining_s(deadline) <= 0
                 logger.warning("Semantic search Bedesten search timed out for %s", court_type_name)
             except Exception as e:
                 diagnostics["search_failed"] += 1
@@ -1680,7 +1680,7 @@ YANLIŞ KULLANIM:
                         preview["fetch_status"] = "failed"
             except asyncio.TimeoutError:
                 diagnostics["failed_fetches"] += 1
-                diagnostics["timed_out"] = True
+                diagnostics["timed_out"] = _semantic_remaining_s(deadline) <= 0
                 if preview is not None:
                     preview["fetch_status"] = "timeout"
                 logger.warning("Semantic search document fetch timed out for %s", document_id)
