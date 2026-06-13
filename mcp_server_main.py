@@ -1400,6 +1400,7 @@ if SEMANTIC_SEARCH_AVAILABLE:
             "search_attempted": 0,
             "search_succeeded": 0,
             "search_failed": 0,
+            "search_timeouts": 0,
             "fetch_attempted": 0,
             "fetch_succeeded": 0,
             "failed_fetches": 0,
@@ -1598,6 +1599,7 @@ YANLIŞ KULLANIM:
                 logger.info("Semantic search found %s candidates from %s", len(decisions), court_type_name)
             except asyncio.TimeoutError:
                 diagnostics["search_failed"] += 1
+                diagnostics["search_timeouts"] += 1
                 diagnostics["timed_out"] = _semantic_remaining_s(deadline) <= 0
                 logger.warning("Semantic search Bedesten search timed out for %s", court_type_name)
             except Exception as e:
@@ -1608,10 +1610,12 @@ YANLIŞ KULLANIM:
         decisions_to_process = _round_robin_decisions(grouped_decisions, court_types, max_candidates)
 
         if not decisions_to_process:
-            if diagnostics["timed_out"]:
+            if diagnostics["timed_out"] or (
+                diagnostics["search_timeouts"] > 0 and diagnostics["search_succeeded"] == 0
+            ):
                 return _semantic_response(
                     "partial_timeout",
-                    "Semantic search timed out before collecting candidate decisions.",
+                    "All Bedesten search attempts timed out before candidate decisions were collected.",
                     diagnostics,
                     start_time,
                     candidates_preview=[],
