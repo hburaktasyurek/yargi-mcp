@@ -220,9 +220,11 @@ Yargı MCP, **semantik arama** özelliği ile kararları anlamsal olarak sırala
 - **Hosted**: OpenRouter API anahtarı
 
 ### Semantik Arama Nasıl Çalışır?
-1. `initial_keyword` ile Bedesten API'den 100 karar çekilir
-2. `query` ile bu kararlar embedding modeli kullanılarak anlamsal olarak sıralanır
-3. En alakalı kararlar döndürülür
+1. `initial_keyword` ile Bedesten API'den sınırlı aday kararlar çekilir
+2. Varsayılan olarak yalnızca `YARGITAYKARARI` ve `ISTINAFHUKUK` aranır
+3. En fazla `max_candidates` kararın tam metni alınır (varsayılan 8, üst sınır 20)
+4. `query` ile bu adaylar embedding modeli kullanılarak anlamsal olarak sıralanır
+5. Timeout veya embedding hatasında MCP çağrısı açık bırakılmaz; structured `partial_timeout` veya `embedding_error` response döner
 
 ### Önerilen Türkçe Kurulumu (Yerel — `multilingual-e5-large`)
 
@@ -285,13 +287,13 @@ EMBEDDING_PROMPT_STYLE=raw
 
 ```bash
 OPENROUTER_API_KEY=sk-or-v1-xxx...
-# İsteğe bağlı — varsayılan google/gemini-embedding-001 (3072 dim, ÜCRETLİ)
+# İsteğe bağlı — varsayılan google/gemini-embedding-2 (3072 dim)
 # OPENROUTER_EMBEDDING_MODEL=...
 # OPENROUTER_EMBEDDING_DIMENSION=...
 # EMBEDDING_PROMPT_STYLE=gemini   # varsayılan
 ```
 
-API anahtarınızı [openrouter.ai/keys](https://openrouter.ai/keys) adresinden alın. Varsayılan model `google/gemini-embedding-001` artık ücretli — ücretsiz bir model seçerseniz `OPENROUTER_EMBEDDING_MODEL`, `OPENROUTER_EMBEDDING_DIMENSION` ve uygun `EMBEDDING_PROMPT_STYLE` değerlerini birlikte ayarlayın.
+API anahtarınızı [openrouter.ai/keys](https://openrouter.ai/keys) adresinden alın. Farklı bir model seçerseniz `OPENROUTER_EMBEDDING_MODEL`, `OPENROUTER_EMBEDDING_DIMENSION` ve uygun `EMBEDDING_PROMPT_STYLE` değerlerini birlikte ayarlayın.
 
 ### Yapılandırma Referansı
 
@@ -303,10 +305,14 @@ API anahtarınızı [openrouter.ai/keys](https://openrouter.ai/keys) adresinden 
 | `LOCAL_EMBEDDING_MODEL` | Model adı | `intfloat/multilingual-e5-large` |
 | `LOCAL_EMBEDDING_DIMENSION` | Modelin çıktı boyutu (mutlaka eşleşmeli) | `1024` |
 | `OPENROUTER_API_KEY` | OpenRouter anahtarı (sadece hosted için) | `sk-or-v1-…` |
-| `OPENROUTER_EMBEDDING_MODEL` | OpenRouter model id'si | `google/gemini-embedding-001` |
+| `OPENROUTER_EMBEDDING_MODEL` | OpenRouter model id'si | `google/gemini-embedding-2` |
 | `OPENROUTER_EMBEDDING_DIMENSION` | OpenRouter modelinin çıktı boyutu | `3072` |
+| `SEMANTIC_SEARCH_TIMEOUT_S` | Semantik arama toplam süre bütçesi (15-120 arası clamp edilir) | `45` |
+| `SEMANTIC_CALL_TIMEOUT_S` | Her Bedesten search/fetch çağrısı için timeout (3-30 arası clamp edilir) | `12` |
+| `EMBEDDING_REQUEST_TIMEOUT_S` | Embedding API çağrısı timeout'u (5-60 arası clamp edilir) | `20` |
+| `EMBEDDING_MAX_RETRIES` | Embedding API retry sayısı (0-3 arası clamp edilir) | `1` |
 
-> 💡 **Not:** Hiçbir embedding sağlayıcı yapılandırılmazsa semantik arama aracı görünmez, diğer 24 araç normal şekilde çalışır.
+> 💡 **Not:** Hiçbir embedding sağlayıcı yapılandırılmazsa semantik arama aracı görünmez, diğer 26 araç normal şekilde çalışır. `allow_broad_search=True` ile 3+ court type seçmek ve eşzamanlı semantik çağrılar `partial_timeout` olasılığını artırır.
 
 </details>
 
