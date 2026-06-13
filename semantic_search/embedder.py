@@ -30,6 +30,52 @@ LOCAL_DEFAULT_DIMENSION = 768
 #   - "raw":    no prefix; pass text through as-is
 PROMPT_STYLES = ("gemini", "e5", "raw")
 DEFAULT_PROMPT_STYLE = "gemini"
+DEFAULT_EMBEDDING_TIMEOUT_S = 20.0
+DEFAULT_EMBEDDING_MAX_RETRIES = 1
+
+
+def _coerce_float_env(env_name: str, default: float, min_value: float, max_value: float) -> float:
+    raw_value = os.getenv(env_name)
+    if raw_value is None or raw_value == "":
+        return default
+    try:
+        parsed = float(raw_value)
+    except ValueError:
+        logger.warning("%s=%r is invalid; using default %.1f", env_name, raw_value, default)
+        return default
+    if parsed < min_value:
+        logger.warning("%s=%s below minimum %.1f; clamping", env_name, raw_value, min_value)
+        return min_value
+    if parsed > max_value:
+        logger.warning("%s=%s above maximum %.1f; clamping", env_name, raw_value, max_value)
+        return max_value
+    return parsed
+
+
+def _coerce_int_env(env_name: str, default: int, min_value: int, max_value: int) -> int:
+    raw_value = os.getenv(env_name)
+    if raw_value is None or raw_value == "":
+        return default
+    try:
+        parsed = int(raw_value)
+    except ValueError:
+        logger.warning("%s=%r is invalid; using default %d", env_name, raw_value, default)
+        return default
+    if parsed < min_value:
+        logger.warning("%s=%s below minimum %d; clamping", env_name, raw_value, min_value)
+        return min_value
+    if parsed > max_value:
+        logger.warning("%s=%s above maximum %d; clamping", env_name, raw_value, max_value)
+        return max_value
+    return parsed
+
+
+def get_embedding_request_timeout_s() -> float:
+    return _coerce_float_env("EMBEDDING_REQUEST_TIMEOUT_S", DEFAULT_EMBEDDING_TIMEOUT_S, 5.0, 60.0)
+
+
+def get_embedding_max_retries() -> int:
+    return _coerce_int_env("EMBEDDING_MAX_RETRIES", DEFAULT_EMBEDDING_MAX_RETRIES, 0, 3)
 
 
 def _format_query(prompt_style: str, query: str, task: str) -> str:
@@ -243,6 +289,8 @@ class OpenRouterEmbedder(_BaseOpenAICompatibleEmbedder):
         self.client = OpenAI(
             base_url="https://openrouter.ai/api/v1",
             api_key=api_key,
+            timeout=get_embedding_request_timeout_s(),
+            max_retries=get_embedding_max_retries(),
         )
         self.model = model or os.getenv("OPENROUTER_EMBEDDING_MODEL") or DEFAULT_MODEL
         self.dimension = _coerce_dimension(
@@ -308,7 +356,12 @@ class LocalEmbedder(_BaseOpenAICompatibleEmbedder):
             or "no-key-needed"
         )
 
-        self.client = OpenAI(base_url=self.base_url, api_key=effective_key)
+        self.client = OpenAI(
+            base_url=self.base_url,
+            api_key=effective_key,
+            timeout=get_embedding_request_timeout_s(),
+            max_retries=get_embedding_max_retries(),
+        )
         self.model = model or os.getenv("LOCAL_EMBEDDING_MODEL") or LOCAL_DEFAULT_MODEL
         self.dimension = _coerce_dimension(
             dimension if dimension is not None else os.getenv("LOCAL_EMBEDDING_DIMENSION"),

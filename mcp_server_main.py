@@ -18,6 +18,7 @@ import atexit
 import logging
 import httpx
 import json
+import os
 import time
 from collections import defaultdict
 from pydantic import HttpUrl, Field
@@ -1302,10 +1303,163 @@ async def get_bedesten_document_markdown(
         raise
 
 
-# --- Semantic Search Tool (Conditional - requires OPENROUTER_API_KEY) ---
+# --- Semantic Search Tool (Conditional - requires an embedding provider) ---
 if SEMANTIC_SEARCH_AVAILABLE:
+    from semantic_search.embedder import get_embedding_request_timeout_s
+
+    def _semantic_float_env(name: str, default: float, minimum: float, maximum: float) -> float:
+        raw_value = os.getenv(name)
+        if raw_value is None or raw_value == "":
+            return default
+        try:
+            parsed = float(raw_value)
+        except ValueError:
+            logger.warning("%s=%r is invalid; using default %.1f", name, raw_value, default)
+            return default
+        if parsed < minimum:
+            logger.warning("%s=%s below minimum %.1f; clamping", name, raw_value, minimum)
+            return minimum
+        if parsed > maximum:
+            logger.warning("%s=%s above maximum %.1f; clamping", name, raw_value, maximum)
+            return maximum
+        return parsed
+
+    def _semantic_now_ms(start_time: float) -> int:
+        return int((time.monotonic() - start_time) * 1000)
+
+    def _semantic_remaining_s(deadline: float) -> float:
+        return max(0.0, deadline - time.monotonic())
+
+    def _court_type_value(court_type: Any) -> str:
+        return getattr(court_type, "value", str(court_type))
+
+    def _decision_court_type(decision: Any) -> Optional[str]:
+        item_type = getattr(decision, "itemType", None)
+        return getattr(item_type, "name", None) if item_type else None
+
+    def _semantic_title(metadata: Dict[str, Any], fallback_id: Optional[str] = None) -> str:
+        title_parts = []
+        if metadata.get("birim_adi"):
+            title_parts.append(metadata["birim_adi"])
+        if metadata.get("esas_no"):
+            title_parts.append(f"Esas: {metadata['esas_no']}")
+        if metadata.get("karar_no"):
+            title_parts.append(f"Karar: {metadata['karar_no']}")
+        if metadata.get("karar_tarihi"):
+            title_parts.append(f"Tarih: {metadata['karar_tarihi']}")
+        return " - ".join(title_parts) if title_parts else f"Document {fallback_id}"
+
+    def _semantic_metadata(decision: Any) -> Dict[str, Any]:
+        document_id = getattr(decision, "documentId", None)
+        metadata = {
+            "document_id": document_id,
+            "birim_adi": getattr(decision, "birimAdi", None),
+            "esas_no": getattr(decision, "esasNo", None),
+            "karar_no": getattr(decision, "kararNo", None),
+            "karar_tarihi": getattr(decision, "kararTarihiStr", None),
+            "court_type": _decision_court_type(decision),
+        }
+        metadata["title"] = _semantic_title(metadata, document_id)
+        metadata["source_url"] = f"https://mevzuat.adalet.gov.tr/ictihat/{document_id}" if document_id else None
+        return metadata
+
+    def _semantic_candidate_preview(
+        metadata: Dict[str, Any],
+        fetch_status: str = "not_attempted",
+        preview_text: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        preview = preview_text[:500] if preview_text else None
+        return {
+            "document_id": metadata.get("document_id"),
+            "title": metadata.get("title") or _semantic_title(metadata, metadata.get("document_id")),
+            "birim_adi": metadata.get("birim_adi"),
+            "esas_no": metadata.get("esas_no"),
+            "karar_no": metadata.get("karar_no"),
+            "karar_tarihi": metadata.get("karar_tarihi"),
+            "court_type": metadata.get("court_type"),
+            "source_url": metadata.get("source_url"),
+            "preview_available": bool(preview),
+            "preview_text": preview,
+            "fetch_status": fetch_status,
+        }
+
+    def _semantic_base_diagnostics(
+        court_types: List[Any],
+        max_candidates: int,
+        top_k: int,
+        timeout_s: float,
+    ) -> Dict[str, Any]:
+        return {
+            "provider": None,
+            "embedding_model": None,
+            "court_types_requested": [_court_type_value(court_type) for court_type in court_types],
+            "max_candidates": max_candidates,
+            "top_k": top_k,
+            "documents_found": 0,
+            "search_attempted": 0,
+            "search_succeeded": 0,
+            "search_failed": 0,
+            "fetch_attempted": 0,
+            "fetch_succeeded": 0,
+            "failed_fetches": 0,
+            "search_ms": 0,
+            "fetch_ms_total": 0,
+            "embedding_ms": 0,
+            "total_ms": 0,
+            "timed_out": False,
+            "timeout_s": timeout_s,
+        }
+
+    def _semantic_response(
+        status: str,
+        message: str,
+        diagnostics: Dict[str, Any],
+        start_time: float,
+        *,
+        candidates_preview: Optional[List[Dict[str, Any]]] = None,
+        results: Optional[List[Dict[str, Any]]] = None,
+        semantic_ranking_skipped: Optional[bool] = None,
+        query: Optional[str] = None,
+        initial_keyword: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        diagnostics["total_ms"] = _semantic_now_ms(start_time)
+        response = {
+            "status": status,
+            "message": message,
+            "diagnostics": diagnostics,
+        }
+        if query is not None:
+            response["query"] = query
+        if initial_keyword is not None:
+            response["initial_keyword"] = initial_keyword
+        if results is not None:
+            response["results"] = results
+        if candidates_preview is not None:
+            response["candidates_preview"] = candidates_preview
+        if semantic_ranking_skipped is not None:
+            response["semantic_ranking_skipped"] = semantic_ranking_skipped
+        return response
+
+    def _round_robin_decisions(grouped_decisions: Dict[str, List[Any]], court_types: List[Any], limit: int) -> List[Any]:
+        selected = []
+        court_order = [_court_type_value(court_type) for court_type in court_types]
+        max_group_len = max((len(grouped_decisions.get(court_type, [])) for court_type in court_order), default=0)
+        for index in range(max_group_len):
+            for court_type in court_order:
+                group = grouped_decisions.get(court_type, [])
+                if index < len(group):
+                    selected.append(group[index])
+                    if len(selected) >= limit:
+                        return selected
+        return selected
+
     @app.tool(
-        description="Use this when you need intelligent semantic search on Turkish legal decisions. Uses AI embeddings for relevance re-ranking.",
+        description=(
+            "Use this to semantically re-rank a small candidate set of Turkish court decision records from Bedesten. "
+            "This is not a broad search tool: default scope is Yargıtay + Appeals Court decisions, top_k/max_candidates default to 8, "
+            "and results is returned only after embedding re-ranking succeeds. Timeout/error responses use candidates_preview instead. "
+            "Set allow_broad_search=True only when intentionally searching 3+ court types; broad or concurrent semantic searches increase partial_timeout risk."
+        ),
         annotations={
             "readOnlyHint": True,
             "openWorldHint": True,
@@ -1313,8 +1467,8 @@ if SEMANTIC_SEARCH_AVAILABLE:
         }
     )
     async def search_bedesten_semantic(
-        initial_keyword: str = Field(..., description="""Bedesten API'den ilk sonuçları çekmek için anahtar kelime veya arama ifadesi.
-Bu terim ile API'den 100 karar çekilir, sonra semantik sıralama yapılır.
+        initial_keyword: str = Field(..., description="""Bedesten API'den sınırlı aday kararları çekmek için anahtar kelime veya arama ifadesi.
+Bu terim sadece aday setini bulur; semantik sıralama query alanına göre yapılır.
 
 ARAMA OPERATÖRLERİ:
 • Basit arama: "muvazaa" (kelimeyi içeren kararlar)
@@ -1325,13 +1479,9 @@ ARAMA OPERATÖRLERİ:
 • Zorunlu: "+muvazaa tapu" (muvazaa zorunlu, tapu opsiyonel)
 • Hariç: "muvazaa -miras" (muvazaa içeren, miras hariç)
 
-ÖRNEKLER:
-• "muvazaa" - geniş arama
-• "\"muris muvazaası\"" - tam ifade
-• "muvazaa AND tapu AND iptal" - tüm terimler zorunlu
-• "ecrimisil OR haksız işgal" - alternatifli arama"""),
+Tek kelimelik aramalar geçerlidir, ancak çok geniş sonuç üretebilir. Varsayılan max_candidates=8 bu genişliği sınırlar."""),
         query: str = Field(..., description="""Semantik benzerlik için DETAYLI arama sorgusu.
-initial_keyword ile bulunan kararlar bu sorguya göre anlamsal olarak sıralanır.
+initial_keyword ile bulunan sınırlı aday kararlar bu sorguya göre anlamsal olarak sıralanır.
 
 ÖNEMLİ: Embedding modeli anlamlı cümleler bekler, anahtar kelimeler DEĞİL.
 Aradığınız hukuki meseleyi CÜMLE olarak yazın.
@@ -1343,212 +1493,337 @@ DOĞRU KULLANIM:
 
 YANLIŞ KULLANIM:
 • "muvazaa tapu iptal" (sadece kelimeler, cümle değil)
-• "kıdem tazminat hesap" (bağlamsız kelimeler)
-
-İPUCU: Ne arıyorsanız onu bir cümle olarak ifade edin."""),
+• "kıdem tazminat hesap" (bağlamsız kelimeler)"""),
         court_types: List[BedestenCourtTypeEnum] = Field(
-            default=["YARGITAYKARARI", "DANISTAYKARAR", "YERELHUKUK", "ISTINAFHUKUK", "KYB"],
-            description="Court types to search: YARGITAYKARARI, DANISTAYKARAR, YERELHUKUK, ISTINAFHUKUK, KYB (default: all)"
+            default=["YARGITAYKARARI", "ISTINAFHUKUK"],
+            description=(
+                "Court types to search. Default is YARGITAYKARARI + ISTINAFHUKUK. "
+                "Use allow_broad_search=True when selecting 3+ court types."
+            )
         ),
-        top_k: int = Field(10, ge=1, le=50, description="Number of top results to return (1-50)")
+        top_k: int = Field(8, ge=1, le=20, description="Number of semantically ranked results to return (1-20). Must be <= max_candidates."),
+        max_candidates: int = Field(8, ge=1, le=20, description="Maximum number of document bodies to fetch and embed (1-20)."),
+        allow_broad_search: bool = Field(False, description="Set true to allow searching 3 or more court types; this increases partial_timeout risk.")
     ) -> Dict[str, Any]:
         """
-        Perform semantic search on Turkish legal decisions using OpenRouter API.
-
-        This tool:
-        1. Searches Bedesten API with initial keyword (retrieves 100 results)
-        2. Fetches full document content for each result
-        3. Generates embeddings using Google's Gemini Embedding model via OpenRouter
-        4. Performs semantic similarity search with the query
-        5. Returns re-ranked results based on semantic relevance
-
-        Benefits over keyword search:
-        - Better understanding of context and meaning
-        - Finds semantically similar documents even with different wording
-        - More accurate ranking based on relevance
-        - Supports multilingual queries (100+ languages)
-
-        Note: Requires OPENROUTER_API_KEY environment variable to be set.
+        Perform bounded semantic re-ranking on Bedesten court decision records.
         """
-        logger.info(f"Semantic search tool called with initial_keyword: {initial_keyword}, query: {query}")
+        start_time = time.monotonic()
+        timeout_s = _semantic_float_env("SEMANTIC_SEARCH_TIMEOUT_S", 45.0, 15.0, 120.0)
+        call_timeout_s = _semantic_float_env("SEMANTIC_CALL_TIMEOUT_S", 12.0, 3.0, 30.0)
+        embedding_timeout_s = get_embedding_request_timeout_s()
+        if isinstance(court_types, str):
+            court_types = [court_types]
+        elif isinstance(court_types, tuple):
+            court_types = list(court_types)
+        elif not isinstance(court_types, list):
+            court_types = ["YARGITAYKARARI", "ISTINAFHUKUK"]
+        if not isinstance(top_k, int):
+            top_k = 8
+        if not isinstance(max_candidates, int):
+            max_candidates = 8
+        if not isinstance(allow_broad_search, bool):
+            allow_broad_search = False
+        deadline = start_time + timeout_s
+        diagnostics = _semantic_base_diagnostics(court_types, max_candidates, top_k, timeout_s)
 
-        try:
-            # Initialize components (provider chosen via EMBEDDING_PROVIDER /
-            # OPENROUTER_API_KEY env vars)
-            embedder = get_embedder()
-            vector_store = VectorStore(dimension=embedder.dimension)
-            processor = DocumentProcessor(chunk_size=1500, chunk_overlap=300)
+        logger.info(
+            "Semantic search tool called: initial_keyword=%r, top_k=%s, max_candidates=%s, court_types=%s",
+            initial_keyword,
+            top_k,
+            max_candidates,
+            [_court_type_value(court_type) for court_type in court_types],
+        )
 
-            # Step 1: Initial keyword search to get document IDs
-            logger.info(f"Step 1: Searching Bedesten API with keyword: {initial_keyword}")
+        keyword = (initial_keyword or "").strip()
+        if len(keyword) < 2:
+            return _semantic_response(
+                "validation_error",
+                "initial_keyword must contain at least 2 non-whitespace characters.",
+                diagnostics,
+                start_time,
+                query=query,
+                initial_keyword=initial_keyword,
+            )
+        if top_k > max_candidates:
+            return _semantic_response(
+                "validation_error",
+                "top_k must be less than or equal to max_candidates.",
+                diagnostics,
+                start_time,
+                query=query,
+                initial_keyword=initial_keyword,
+            )
+        if len(court_types) >= 3 and not allow_broad_search:
+            return _semantic_response(
+                "validation_error",
+                "Selecting 3 or more court types requires allow_broad_search=True.",
+                diagnostics,
+                start_time,
+                query=query,
+                initial_keyword=initial_keyword,
+            )
 
-            all_decisions = []
+        grouped_decisions: Dict[str, List[Any]] = {}
+        search_start = time.monotonic()
 
-            # Search each court type
-            for court_type in court_types:
-                try:
-                    per_court_limit = max(20, 100 // len(court_types))
+        for court_type in court_types:
+            remaining = _semantic_remaining_s(deadline)
+            if remaining <= 0:
+                diagnostics["timed_out"] = True
+                break
 
-                    search_results = await bedesten_client_instance.search_documents(
-                        BedestenSearchRequest(
-                            data=BedestenSearchData(
-                                phrase=initial_keyword,
-                                itemTypeList=[court_type],
-                                pageSize=per_court_limit,
-                                pageNumber=1
-                            )
-                        )
+            court_type_name = _court_type_value(court_type)
+            diagnostics["search_attempted"] += 1
+            try:
+                search_request = BedestenSearchRequest(
+                    data=BedestenSearchData(
+                        phrase=keyword,
+                        itemTypeList=[court_type],
+                        pageSize=min(10, max_candidates),
+                        pageNumber=1
                     )
+                )
+                search_results = await asyncio.wait_for(
+                    bedesten_client_instance.search_documents(search_request),
+                    timeout=min(call_timeout_s, remaining),
+                )
+                decisions = []
+                if search_results.data and search_results.data.emsalKararList:
+                    decisions = search_results.data.emsalKararList
+                grouped_decisions[court_type_name] = decisions
+                diagnostics["search_succeeded"] += 1
+                diagnostics["documents_found"] += len(decisions)
+                logger.info("Semantic search found %s candidates from %s", len(decisions), court_type_name)
+            except asyncio.TimeoutError:
+                diagnostics["search_failed"] += 1
+                diagnostics["timed_out"] = True
+                logger.warning("Semantic search Bedesten search timed out for %s", court_type_name)
+            except Exception as e:
+                diagnostics["search_failed"] += 1
+                logger.warning("Semantic search Bedesten search failed for %s: %s", court_type_name, e)
 
-                    if search_results.data and search_results.data.emsalKararList:
-                        all_decisions.extend(search_results.data.emsalKararList)
-                        logger.info(f"Found {len(search_results.data.emsalKararList)} results from {court_type}")
+        diagnostics["search_ms"] = _semantic_now_ms(search_start)
+        decisions_to_process = _round_robin_decisions(grouped_decisions, court_types, max_candidates)
 
-                except Exception as e:
-                    logger.warning(f"Error searching {court_type}: {e}")
+        if not decisions_to_process:
+            if diagnostics["timed_out"]:
+                return _semantic_response(
+                    "partial_timeout",
+                    "Semantic search timed out before collecting candidate decisions.",
+                    diagnostics,
+                    start_time,
+                    candidates_preview=[],
+                    semantic_ranking_skipped=True,
+                    query=query,
+                    initial_keyword=initial_keyword,
+                )
+            return _semantic_response(
+                "no_results",
+                "No documents found matching the initial keyword.",
+                diagnostics,
+                start_time,
+                query=query,
+                initial_keyword=initial_keyword,
+            )
 
-            if not all_decisions:
-                logger.warning("No documents found from initial search")
-                return {
-                    "status": "no_results",
-                    "message": "No documents found matching the initial keyword",
-                    "results": []
-                }
+        documents_data = []
+        candidates_preview = [
+            _semantic_candidate_preview(_semantic_metadata(decision))
+            for decision in decisions_to_process
+        ]
+        preview_by_id = {preview["document_id"]: preview for preview in candidates_preview}
+        processor = DocumentProcessor(chunk_size=1500, chunk_overlap=300)
+        fetch_start = time.monotonic()
 
-            logger.info(f"Total documents found: {len(all_decisions)}")
+        for decision in decisions_to_process:
+            remaining = _semantic_remaining_s(deadline)
+            if remaining <= 0:
+                diagnostics["timed_out"] = True
+                break
 
-            # Step 2: Fetch document content and process
-            logger.info("Step 2: Fetching and processing document content...")
+            metadata = _semantic_metadata(decision)
+            document_id = metadata["document_id"]
+            preview = preview_by_id.get(document_id)
+            diagnostics["fetch_attempted"] += 1
+            try:
+                doc = await asyncio.wait_for(
+                    bedesten_client_instance.get_document_as_markdown(document_id),
+                    timeout=min(call_timeout_s, remaining),
+                )
+                markdown_content = doc.markdown_content or ""
+                if preview is not None:
+                    preview.update(_semantic_candidate_preview(metadata, "fetched", markdown_content))
 
-            documents_data = []
-            failed_fetches = 0
-            decisions_to_process = all_decisions[:100]
+                if markdown_content:
+                    chunks = processor.process_document(
+                        document_id=document_id,
+                        text=markdown_content,
+                        metadata=metadata
+                    )
+                    if chunks:
+                        full_text = " ".join([chunk.text for chunk in chunks])
+                        documents_data.append({
+                            "id": document_id,
+                            "text": full_text[:3000],
+                            "metadata": metadata
+                        })
+                        diagnostics["fetch_succeeded"] += 1
+                    else:
+                        diagnostics["failed_fetches"] += 1
+                        if preview is not None:
+                            preview["fetch_status"] = "failed"
+                else:
+                    diagnostics["failed_fetches"] += 1
+                    if preview is not None:
+                        preview["fetch_status"] = "failed"
+            except asyncio.TimeoutError:
+                diagnostics["failed_fetches"] += 1
+                diagnostics["timed_out"] = True
+                if preview is not None:
+                    preview["fetch_status"] = "timeout"
+                logger.warning("Semantic search document fetch timed out for %s", document_id)
+            except Exception as e:
+                diagnostics["failed_fetches"] += 1
+                if preview is not None:
+                    preview["fetch_status"] = "failed"
+                logger.warning("Semantic search document fetch failed for %s: %s", document_id, e)
 
-            for i, decision in enumerate(decisions_to_process):
-                try:
-                    doc = await bedesten_client_instance.get_document_as_markdown(decision.documentId)
+        diagnostics["fetch_ms_total"] = _semantic_now_ms(fetch_start)
 
-                    if doc.markdown_content:
-                        metadata = {
-                            "document_id": decision.documentId,
-                            "birim_adi": decision.birimAdi,
-                            "esas_no": decision.esasNo,
-                            "karar_no": decision.kararNo,
-                            "karar_tarihi": decision.kararTarihiStr,
-                            "court_type": decision.itemType.name if decision.itemType else None
-                        }
+        if diagnostics["timed_out"] or _semantic_remaining_s(deadline) <= 0:
+            diagnostics["timed_out"] = True
+            return _semantic_response(
+                "partial_timeout",
+                "Semantic search timed out before embedding re-ranking completed.",
+                diagnostics,
+                start_time,
+                candidates_preview=candidates_preview,
+                semantic_ranking_skipped=True,
+                query=query,
+                initial_keyword=initial_keyword,
+            )
 
-                        chunks = processor.process_document(
-                            document_id=decision.documentId,
-                            text=doc.markdown_content,
-                            metadata=metadata
-                        )
+        if not documents_data:
+            return _semantic_response(
+                "embedding_error",
+                "No fetched document content could be processed for semantic ranking.",
+                diagnostics,
+                start_time,
+                candidates_preview=candidates_preview,
+                query=query,
+                initial_keyword=initial_keyword,
+            )
 
-                        if chunks:
-                            full_text = " ".join([chunk.text for chunk in chunks])
-                            documents_data.append({
-                                "id": decision.documentId,
-                                "text": full_text[:3000],
-                                "metadata": metadata
-                            })
+        if _semantic_remaining_s(deadline) <= 0:
+            diagnostics["timed_out"] = True
+            return _semantic_response(
+                "partial_timeout",
+                "Semantic search timed out before embedding started.",
+                diagnostics,
+                start_time,
+                candidates_preview=candidates_preview,
+                semantic_ranking_skipped=True,
+                query=query,
+                initial_keyword=initial_keyword,
+            )
 
-                    if (i + 1) % 10 == 0:
-                        logger.info(f"Processed {i + 1}/{len(decisions_to_process)} documents")
+        embedding_started = False
+        embedding_start = time.monotonic()
+        try:
+            embedding_started = True
+            embedder = get_embedder()
+            diagnostics["provider"] = provider
+            diagnostics["embedding_model"] = getattr(embedder, "model", None)
+            vector_store = VectorStore(dimension=embedder.dimension)
 
-                except Exception as e:
-                    logger.warning(f"Failed to fetch document {decision.documentId}: {e}")
-                    failed_fetches += 1
+            remaining = _semantic_remaining_s(deadline)
+            if remaining <= 0:
+                diagnostics["timed_out"] = True
+                return _semantic_response(
+                    "partial_timeout",
+                    "Semantic search timed out before embedding started.",
+                    diagnostics,
+                    start_time,
+                    candidates_preview=candidates_preview,
+                    semantic_ranking_skipped=True,
+                    query=query,
+                    initial_keyword=initial_keyword,
+                )
+            query_embedding = await asyncio.wait_for(
+                asyncio.to_thread(embedder.encode_query, query, "search result"),
+                timeout=min(embedding_timeout_s, remaining),
+            )
 
-            if not documents_data:
-                logger.warning("No documents could be processed")
-                return {
-                    "status": "processing_error",
-                    "message": "Could not process any documents",
-                    "results": []
-                }
-
-            logger.info(f"Successfully processed {len(documents_data)} documents, {failed_fetches} failed")
-
-            # Step 3: Generate embeddings
-            logger.info("Step 3: Generating embeddings...")
-
-            query_embedding = embedder.encode_query(query, task="search result")
+            remaining = _semantic_remaining_s(deadline)
+            if remaining <= 0:
+                raise asyncio.TimeoutError()
 
             doc_texts = [doc["text"] for doc in documents_data]
             doc_titles = [doc["metadata"].get("birim_adi", "none") for doc in documents_data]
-            doc_embeddings = embedder.encode_documents(doc_texts, titles=doc_titles)
-
-            # No dimension reduction - using full 3072 dimensions
-
-            # Step 4: Add to vector store and search
-            logger.info("Step 4: Performing semantic search...")
-
-            doc_ids = [doc["id"] for doc in documents_data]
-            doc_metadatas = [doc["metadata"] for doc in documents_data]
-
-            vector_store.add_documents(
-                ids=doc_ids,
-                texts=doc_texts,
-                embeddings=doc_embeddings,
-                metadata=doc_metadatas
+            doc_embeddings = await asyncio.wait_for(
+                asyncio.to_thread(embedder.encode_documents, doc_texts, doc_titles),
+                timeout=min(embedding_timeout_s, remaining),
             )
-
-            search_results = vector_store.search(
-                query_embedding=query_embedding,
-                top_k=top_k,
-                threshold=0.3
-            )
-
-            # Step 5: Format results
-            logger.info(f"Step 5: Formatting {len(search_results)} results")
-
-            formatted_results = []
-            for doc, score in search_results:
-                title_parts = []
-                if doc.metadata.get("birim_adi"):
-                    title_parts.append(doc.metadata["birim_adi"])
-                if doc.metadata.get("esas_no"):
-                    title_parts.append(f"Esas: {doc.metadata['esas_no']}")
-                if doc.metadata.get("karar_no"):
-                    title_parts.append(f"Karar: {doc.metadata['karar_no']}")
-                if doc.metadata.get("karar_tarihi"):
-                    title_parts.append(f"Tarih: {doc.metadata['karar_tarihi']}")
-
-                title = " - ".join(title_parts) if title_parts else f"Document {doc.id}"
-
-                formatted_results.append({
-                    "document_id": doc.id,
-                    "title": title,
-                    "similarity_score": float(score),
-                    "preview": doc.text[:500] + "..." if len(doc.text) > 500 else doc.text,
-                    "metadata": doc.metadata,
-                    "source_url": f"https://mevzuat.adalet.gov.tr/ictihat/{doc.id}"
-                })
-
-            stats = vector_store.get_stats()
-
-            return {
-                "status": "success",
-                "query": query,
-                "initial_keyword": initial_keyword,
-                "total_documents_processed": len(documents_data),
-                "embedding_model": embedder.model,
-                "embedding_dimension": embedder.dimension,
-                "results": formatted_results,
-                "stats": {
-                    "documents_in_store": stats["num_documents"],
-                    "memory_usage_mb": round(stats["memory_usage_mb"], 2),
-                    "failed_fetches": failed_fetches
-                }
-            }
-
         except Exception as e:
-            logger.exception(f"Error in semantic search: {e}")
-            return {
-                "status": "error",
-                "message": str(e),
-                "results": []
-            }
+            diagnostics["embedding_ms"] = _semantic_now_ms(embedding_start)
+            if isinstance(e, asyncio.TimeoutError):
+                diagnostics["timed_out"] = True
+            status = "embedding_error" if embedding_started else "partial_timeout"
+            message = (
+                "Embedding request failed or timed out after embedding started."
+                if embedding_started
+                else "Semantic search timed out before embedding started."
+            )
+            return _semantic_response(
+                status,
+                message,
+                diagnostics,
+                start_time,
+                candidates_preview=candidates_preview,
+                semantic_ranking_skipped=(status == "partial_timeout"),
+                query=query,
+                initial_keyword=initial_keyword,
+            )
+
+        diagnostics["embedding_ms"] = _semantic_now_ms(embedding_start)
+
+        doc_ids = [doc["id"] for doc in documents_data]
+        doc_metadatas = [doc["metadata"] for doc in documents_data]
+        doc_texts = [doc["text"] for doc in documents_data]
+        vector_store.add_documents(
+            ids=doc_ids,
+            texts=doc_texts,
+            embeddings=doc_embeddings,
+            metadata=doc_metadatas
+        )
+
+        search_results = vector_store.search(
+            query_embedding=query_embedding,
+            top_k=top_k,
+            threshold=0.3
+        )
+
+        formatted_results = []
+        for doc, score in search_results:
+            formatted_results.append({
+                "document_id": doc.id,
+                "title": _semantic_title(doc.metadata, doc.id),
+                "similarity_score": float(score),
+                "preview": doc.text[:500] + "..." if len(doc.text) > 500 else doc.text,
+                "metadata": doc.metadata,
+                "source_url": doc.metadata.get("source_url") or f"https://mevzuat.adalet.gov.tr/ictihat/{doc.id}"
+            })
+
+        return _semantic_response(
+            "success",
+            "Semantic search completed successfully.",
+            diagnostics,
+            start_time,
+            results=formatted_results,
+            query=query,
+            initial_keyword=initial_keyword,
+        )
 
 
 # --- MCP Tools for Sayıştay (Turkish Court of Accounts) ---
