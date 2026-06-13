@@ -21,6 +21,7 @@ import json
 import os
 import time
 from collections import defaultdict
+from functools import partial
 from pydantic import HttpUrl, Field
 from typing import Optional, Dict, List, Literal, Any
 from fastmcp.server.middleware import Middleware, MiddlewareContext
@@ -1731,9 +1732,12 @@ YANLIŞ KULLANIM:
         embedding_started = False
         embedding_start = time.monotonic()
         try:
-            embedding_started = True
             embedder = get_embedder()
-            diagnostics["provider"] = provider
+            diagnostics["provider"] = getattr(
+                embedder,
+                "provider",
+                "local" if is_local_embedding_configured() else "openrouter"
+            )
             diagnostics["embedding_model"] = getattr(embedder, "model", None)
             vector_store = VectorStore(dimension=embedder.dimension)
 
@@ -1750,6 +1754,7 @@ YANLIŞ KULLANIM:
                     query=query,
                     initial_keyword=initial_keyword,
                 )
+            embedding_started = True
             query_embedding = await asyncio.wait_for(
                 asyncio.to_thread(embedder.encode_query, query, "search result"),
                 timeout=min(embedding_timeout_s, remaining),
@@ -1762,26 +1767,24 @@ YANLIŞ KULLANIM:
             doc_texts = [doc["text"] for doc in documents_data]
             doc_titles = [doc["metadata"].get("birim_adi", "none") for doc in documents_data]
             doc_embeddings = await asyncio.wait_for(
-                asyncio.to_thread(embedder.encode_documents, doc_texts, doc_titles),
+                asyncio.to_thread(partial(embedder.encode_documents, doc_texts, titles=doc_titles)),
                 timeout=min(embedding_timeout_s, remaining),
             )
         except Exception as e:
             diagnostics["embedding_ms"] = _semantic_now_ms(embedding_start)
             if isinstance(e, asyncio.TimeoutError):
                 diagnostics["timed_out"] = True
-            status = "embedding_error" if embedding_started else "partial_timeout"
             message = (
                 "Embedding request failed or timed out after embedding started."
                 if embedding_started
-                else "Semantic search timed out before embedding started."
+                else "Embedding initialization failed before any embedding request was sent."
             )
             return _semantic_response(
-                status,
+                "embedding_error",
                 message,
                 diagnostics,
                 start_time,
                 candidates_preview=candidates_preview,
-                semantic_ranking_skipped=(status == "partial_timeout"),
                 query=query,
                 initial_keyword=initial_keyword,
             )
@@ -1790,30 +1793,41 @@ YANLIŞ KULLANIM:
 
         doc_ids = [doc["id"] for doc in documents_data]
         doc_metadatas = [doc["metadata"] for doc in documents_data]
-        doc_texts = [doc["text"] for doc in documents_data]
-        vector_store.add_documents(
-            ids=doc_ids,
-            texts=doc_texts,
-            embeddings=doc_embeddings,
-            metadata=doc_metadatas
-        )
+        try:
+            vector_store.add_documents(
+                ids=doc_ids,
+                texts=doc_texts,
+                embeddings=doc_embeddings,
+                metadata=doc_metadatas
+            )
 
-        search_results = vector_store.search(
-            query_embedding=query_embedding,
-            top_k=top_k,
-            threshold=0.3
-        )
+            search_results = vector_store.search(
+                query_embedding=query_embedding,
+                top_k=top_k,
+                threshold=0.3
+            )
 
-        formatted_results = []
-        for doc, score in search_results:
-            formatted_results.append({
-                "document_id": doc.id,
-                "title": _semantic_title(doc.metadata, doc.id),
-                "similarity_score": float(score),
-                "preview": doc.text[:500] + "..." if len(doc.text) > 500 else doc.text,
-                "metadata": doc.metadata,
-                "source_url": doc.metadata.get("source_url") or f"https://mevzuat.adalet.gov.tr/ictihat/{doc.id}"
-            })
+            formatted_results = []
+            for doc, score in search_results:
+                formatted_results.append({
+                    "document_id": doc.id,
+                    "title": _semantic_title(doc.metadata, doc.id),
+                    "similarity_score": float(score),
+                    "preview": doc.text[:500] + "..." if len(doc.text) > 500 else doc.text,
+                    "metadata": doc.metadata,
+                    "source_url": doc.metadata.get("source_url") or f"https://mevzuat.adalet.gov.tr/ictihat/{doc.id}"
+                })
+        except Exception as e:
+            logger.warning("Semantic search vector ranking failed: %s", e)
+            return _semantic_response(
+                "embedding_error",
+                "Semantic ranking failed after embeddings were generated.",
+                diagnostics,
+                start_time,
+                candidates_preview=candidates_preview,
+                query=query,
+                initial_keyword=initial_keyword,
+            )
 
         return _semantic_response(
             "success",
