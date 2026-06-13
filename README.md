@@ -287,13 +287,13 @@ EMBEDDING_PROMPT_STYLE=raw
 
 ```bash
 OPENROUTER_API_KEY=sk-or-v1-xxx...
-# İsteğe bağlı — varsayılan google/gemini-embedding-001 (3072 dim, ÜCRETLİ)
+# İsteğe bağlı — varsayılan google/gemini-embedding-2 (3072 dim)
 # OPENROUTER_EMBEDDING_MODEL=...
 # OPENROUTER_EMBEDDING_DIMENSION=...
 # EMBEDDING_PROMPT_STYLE=gemini   # varsayılan
 ```
 
-API anahtarınızı [openrouter.ai/keys](https://openrouter.ai/keys) adresinden alın. Varsayılan model `google/gemini-embedding-001` artık ücretli — ücretsiz bir model seçerseniz `OPENROUTER_EMBEDDING_MODEL`, `OPENROUTER_EMBEDDING_DIMENSION` ve uygun `EMBEDDING_PROMPT_STYLE` değerlerini birlikte ayarlayın.
+API anahtarınızı [openrouter.ai/keys](https://openrouter.ai/keys) adresinden alın. Farklı bir model seçerseniz `OPENROUTER_EMBEDDING_MODEL`, `OPENROUTER_EMBEDDING_DIMENSION` ve uygun `EMBEDDING_PROMPT_STYLE` değerlerini birlikte ayarlayın.
 
 ### Yapılandırma Referansı
 
@@ -305,7 +305,7 @@ API anahtarınızı [openrouter.ai/keys](https://openrouter.ai/keys) adresinden 
 | `LOCAL_EMBEDDING_MODEL` | Model adı | `intfloat/multilingual-e5-large` |
 | `LOCAL_EMBEDDING_DIMENSION` | Modelin çıktı boyutu (mutlaka eşleşmeli) | `1024` |
 | `OPENROUTER_API_KEY` | OpenRouter anahtarı (sadece hosted için) | `sk-or-v1-…` |
-| `OPENROUTER_EMBEDDING_MODEL` | OpenRouter model id'si | `google/gemini-embedding-001` |
+| `OPENROUTER_EMBEDDING_MODEL` | OpenRouter model id'si | `google/gemini-embedding-2` |
 | `OPENROUTER_EMBEDDING_DIMENSION` | OpenRouter modelinin çıktı boyutu | `3072` |
 | `SEMANTIC_SEARCH_TIMEOUT_S` | Semantik arama toplam süre bütçesi (15-120 arası clamp edilir) | `45` |
 | `SEMANTIC_CALL_TIMEOUT_S` | Her Bedesten search/fetch çağrısı için timeout (3-30 arası clamp edilir) | `12` |

@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 
 # OpenRouter defaults (preserve backward compatibility)
-DEFAULT_MODEL = "google/gemini-embedding-001"
+DEFAULT_MODEL = "google/gemini-embedding-2"
 DEFAULT_DIMENSION = 3072
 
 # Local provider defaults — Ollama with nomic-embed-text out of the box.
@@ -24,7 +24,7 @@ LOCAL_DEFAULT_DIMENSION = 768
 # Prompt-template styles. Embedding models are trained with specific
 # prefixes — using the wrong style silently degrades retrieval quality.
 #   - "gemini": "task: {task} | query: {text}" / "title: {title} | text: {text}"
-#               (matches google/gemini-embedding-001, the OpenRouter default)
+#               (matches the Gemini-style OpenRouter default)
 #   - "e5":     "query: {text}" / "passage: {text}"
 #               (matches intfloat/multilingual-e5-* models — best for Turkish)
 #   - "raw":    no prefix; pass text through as-is
@@ -262,7 +262,7 @@ class OpenRouterEmbedder(_BaseOpenAICompatibleEmbedder):
         OPENROUTER_EMBEDDING_MODEL (optional): override the embedding model id
         OPENROUTER_EMBEDDING_DIMENSION (optional): override the vector size
 
-    Defaults preserve backward compatibility: ``google/gemini-embedding-001``
+    Default OpenRouter model: ``google/gemini-embedding-2``
     at 3072 dimensions.
     """
 
@@ -299,7 +299,7 @@ class OpenRouterEmbedder(_BaseOpenAICompatibleEmbedder):
             DEFAULT_DIMENSION,
         )
         # Default to gemini-style prefix for OpenRouter — matches the default
-        # google/gemini-embedding-001 model. Override via constructor or
+        # Gemini-style embedding models. Override via constructor or
         # EMBEDDING_PROMPT_STYLE env var when picking a different model.
         self.prompt_style = _resolve_prompt_style(prompt_style, "gemini")
 
