@@ -89,16 +89,16 @@ class ManyCandidateBedestenClient:
         self.fetched_ids = []
 
     async def search_documents(self, search_request):
+        query_index = len(self.search_requests)
         self.search_requests.append(search_request)
-        page = search_request.data.pageNumber
         return BedestenSearchResponse(
             data=BedestenSearchDataResponse(
                 emsalKararList=[
-                    decision(f"doc-{page}-{index}")
+                    decision(f"doc-{query_index}-{index}")
                     for index in range(10)
                 ],
                 total=100,
-                start=(page - 1) * 10,
+                start=query_index * 10,
             ),
             metadata={},
         )
@@ -132,6 +132,25 @@ class KeywordEmbedder:
                 embeddings.append([1.0, 0.0])
             else:
                 embeddings.append([0.0, 1.0])
+        return np.array(embeddings, dtype=np.float32)
+
+
+class UnnormalizedMagnitudeEmbedder:
+    dimension = 2
+    model = "unnormalized-test-embedder"
+    provider = "test"
+
+    def encode_query(self, query: str, task: str = "search result"):
+        return np.array([1.0, 0.0], dtype=np.float32)
+
+    def encode_documents(self, documents, titles=None):
+        embeddings = []
+        for document in documents:
+            text = document.lower()
+            if "alfa işlemi" in text and "beta zararı" in text:
+                embeddings.append([1.0, 0.0])
+            else:
+                embeddings.append([100.0, 100.0])
         return np.array(embeddings, dtype=np.float32)
 
 
@@ -199,6 +218,10 @@ class BedestenDeepSemanticTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(response["diagnostics"]["candidate_count"], 2)
         self.assertEqual(response["diagnostics"]["fetched_count"], 2)
         self.assertEqual(response["results"][0]["document_id"], "relevant")
+        self.assertTrue(
+            response["results"][0]["source_url"].startswith("https://bedesten.adalet.gov.tr/"),
+            response["results"][0]["source_url"],
+        )
         self.assertIn("beta zararı", response["results"][0]["best_chunks"][0]["text"])
         self.assertTrue(
             any("beta zararı" in query for query in response["generated_queries"]),
@@ -242,7 +265,7 @@ class BedestenDeepSemanticTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response["status"], "success")
         self.assertLessEqual(len(client.search_requests), 8)
-        self.assertLessEqual(len(client.fetched_ids), 25)
+        self.assertEqual(len(client.fetched_ids), 25)
         self.assertLessEqual(len(response["results"]), 25)
         self.assertTrue(
             all(
@@ -250,6 +273,24 @@ class BedestenDeepSemanticTests(unittest.IsolatedAsyncioTestCase):
                 for request in client.search_requests
             )
         )
+
+    async def test_deep_semantic_search_normalizes_embedder_outputs_before_scoring(self):
+        client = FakeBedestenClient()
+
+        response = await search_bedesten_deep_semantic(
+            bedesten_client=client,
+            embedder=UnnormalizedMagnitudeEmbedder(),
+            question="Alfa işlemi sonrası beta zararı için benzer kararlar.",
+            court_type="YARGITAYKARARI",
+            seed_terms=["alfa işlemi", "beta zararı"],
+            max_queries=2,
+            max_search_results=20,
+            max_fulltext_fetches=2,
+            top_k=2,
+        )
+
+        self.assertEqual(response["status"], "success")
+        self.assertEqual(response["results"][0]["document_id"], "relevant")
 
 
 if __name__ == "__main__":

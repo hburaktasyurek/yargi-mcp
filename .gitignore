@@ -170,6 +170,7 @@ fast-mcp-docs.md
 # Debug and test files
 debug_*
 test_*
+!tests/test_*.py
 CLAUDE.md
 
 # ASGI/Deployment files

@@ -1340,9 +1340,10 @@ if SEMANTIC_SEARCH_AVAILABLE:
         top_k: int = Field(8, ge=1, le=25, description="Number of document-level semantic results to return."),
         use_expansion: bool = Field(True, description="Keep true for legal issue expansion. Set false only when question is already a precise Bedesten query.")
     ) -> Dict[str, Any]:
+        court_type_value = getattr(court_type, "value", str(court_type))
         logger.info(
             "Tool 'search_bedesten_deep_semantic' called: court_type=%s, max_queries=%s, max_search_results=%s, max_fulltext_fetches=%s",
-            court_type,
+            court_type_value,
             max_queries,
             max_search_results,
             max_fulltext_fetches,
@@ -1368,7 +1369,7 @@ if SEMANTIC_SEARCH_AVAILABLE:
                 "status": "rate_limit_exceeded",
                 "message": "Bedesten rate limit reached during deep semantic search. Wait retry_after seconds and retry with smaller limits.",
                 "retry_after": retry_after,
-                "court_type": court_type,
+                "court_type": court_type_value,
                 "results": [],
             }
         except httpx.HTTPStatusError as e:
@@ -1379,7 +1380,7 @@ if SEMANTIC_SEARCH_AVAILABLE:
                     "status": "rate_limit_exceeded",
                     "message": "Bedesten API rate limit reached during deep semantic search. Wait retry_after seconds and retry with smaller limits.",
                     "retry_after": retry_after,
-                    "court_type": court_type,
+                    "court_type": court_type_value,
                     "results": [],
                 }
             logger.exception("Error in tool 'search_bedesten_deep_semantic'")

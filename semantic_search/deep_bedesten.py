@@ -6,10 +6,12 @@ import logging
 import os
 import re
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
+import httpx
 import numpy as np
 
+from bedesten_mcp_module.client import BedestenRateLimited
 from bedesten_mcp_module.models import (
     BedestenCourtTypeEnum,
     BedestenSearchData,
@@ -26,6 +28,12 @@ ALLOWED_COURT_TYPES = {
     "YERELHUKUK",
     "KYB",
 }
+
+BEDESTEN_DOCUMENT_SOURCE_URL_TEMPLATE = (
+    "https://bedesten.adalet.gov.tr/emsal-karar/getDocumentContent?documentId={document_id}"
+)
+RESULT_CHUNK_PREVIEW_CHARS = 700
+_LEXICON_CACHE: Dict[str, Tuple[float, Optional[List[Dict[str, Any]]]]] = {}
 
 LEGAL_EXPANSION_PROFILES = [
     {
@@ -85,6 +93,14 @@ def load_legal_expansion_profiles() -> Optional[List[Dict[str, Any]]]:
     if not path:
         return None
     try:
+        mtime = os.path.getmtime(path)
+    except OSError as e:
+        logger.warning("Could not stat Bedesten deep lexicon at %s: %s", path, e)
+        return None
+    cached = _LEXICON_CACHE.get(path)
+    if cached and cached[0] == mtime:
+        return cached[1]
+    try:
         with open(path, "r", encoding="utf-8") as handle:
             payload = json.load(handle)
     except Exception as e:
@@ -115,7 +131,9 @@ def load_legal_expansion_profiles() -> Optional[List[Dict[str, Any]]]:
                 }
             )
 
-    return profiles or None
+    loaded_profiles = profiles or None
+    _LEXICON_CACHE[path] = (mtime, loaded_profiles)
+    return loaded_profiles
 
 
 def _normalize_text(value: str) -> str:
@@ -196,6 +214,12 @@ def _court_type_value(court_type: Any) -> str:
     return getattr(court_type, "value", str(court_type))
 
 
+def _bedesten_document_source_url(document_id: Optional[str]) -> Optional[str]:
+    if not document_id:
+        return None
+    return BEDESTEN_DOCUMENT_SOURCE_URL_TEMPLATE.format(document_id=document_id)
+
+
 def _decision_metadata(decision: Any) -> Dict[str, Any]:
     document_id = getattr(decision, "documentId", None)
     item_type = getattr(decision, "itemType", None)
@@ -218,8 +242,17 @@ def _decision_metadata(decision: Any) -> Dict[str, Any]:
         "karar_no": getattr(decision, "kararNo", None),
         "karar_tarihi": getattr(decision, "kararTarihiStr", None),
         "title": " - ".join(title_parts) if title_parts else f"Document {document_id}",
-        "source_url": f"https://mevzuat.adalet.gov.tr/ictihat/{document_id}" if document_id else None,
+        "source_url": _bedesten_document_source_url(document_id),
     }
+
+
+def _normalize_embeddings(embeddings: np.ndarray) -> np.ndarray:
+    embeddings = np.array(embeddings, dtype=np.float32)
+    if embeddings.ndim == 1:
+        norm = np.linalg.norm(embeddings)
+        return embeddings / norm if norm > 0 else embeddings
+    norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+    return embeddings / (norms + 1e-8)
 
 
 def _semantic_response(
@@ -322,6 +355,8 @@ async def search_bedesten_deep_semantic(
                 )
             )
             diagnostics["searched_query_count"] += 1
+        except (BedestenRateLimited, httpx.HTTPStatusError):
+            raise
         except Exception as e:
             logger.warning("Deep semantic Bedesten search failed for %r: %s", query, e)
             continue
@@ -372,16 +407,28 @@ async def search_bedesten_deep_semantic(
         document_id = candidate["metadata"]["document_id"]
         try:
             document = await bedesten_client.get_document_as_markdown(document_id)
+        except (BedestenRateLimited, httpx.HTTPStatusError):
+            raise
         except Exception as e:
             diagnostics["failed_fetches"] += 1
             logger.warning("Deep semantic document fetch failed for %s: %s", document_id, e)
             continue
 
         markdown = document.markdown_content or ""
+        document_source_url = document.source_url or ""
+        source_url = (
+            document_source_url
+            if document_source_url.startswith("https://bedesten.adalet.gov.tr/")
+            else candidate["metadata"].get("source_url")
+        )
+        candidate_metadata = {
+            **candidate["metadata"],
+            "source_url": source_url,
+        }
         chunks = processor.process_document(
             document_id=document_id,
             text=markdown,
-            metadata=candidate["metadata"].copy(),
+            metadata=candidate_metadata.copy(),
         )
         if not chunks:
             diagnostics["failed_fetches"] += 1
@@ -395,7 +442,7 @@ async def search_bedesten_deep_semantic(
                     "document_id": document_id,
                     "chunk_index": chunk.chunk_index,
                     "text": chunk.text,
-                    "metadata": candidate["metadata"],
+                    "metadata": candidate_metadata,
                     "matched_queries": candidate["matched_queries"],
                 }
             )
@@ -413,8 +460,12 @@ async def search_bedesten_deep_semantic(
             results=[],
         )
 
-    query_embedding = await asyncio.to_thread(embedder.encode_query, question, "legal issue retrieval")
-    chunk_embeddings = await asyncio.to_thread(embedder.encode_documents, chunk_texts)
+    query_embedding = _normalize_embeddings(
+        await asyncio.to_thread(embedder.encode_query, question, "legal issue retrieval")
+    )
+    chunk_embeddings = _normalize_embeddings(
+        await asyncio.to_thread(embedder.encode_documents, chunk_texts)
+    )
     if len(query_embedding.shape) == 1:
         query_embedding = query_embedding.reshape(1, -1)
     similarities = np.atleast_1d(np.dot(chunk_embeddings, query_embedding.T).squeeze())
@@ -440,7 +491,8 @@ async def search_bedesten_deep_semantic(
             {
                 "score": score_float,
                 "chunk_index": chunk_record["chunk_index"],
-                "text": chunk_record["text"][:700],
+                # Keep result payloads compact while chunks remain large enough for scoring.
+                "text": chunk_record["text"][:RESULT_CHUNK_PREVIEW_CHARS],
             }
         )
 
