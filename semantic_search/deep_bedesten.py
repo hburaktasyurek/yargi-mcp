@@ -33,6 +33,7 @@ BEDESTEN_DOCUMENT_SOURCE_URL_TEMPLATE = (
     "https://bedesten.adalet.gov.tr/emsal-karar/getDocumentContent?documentId={document_id}"
 )
 RESULT_CHUNK_PREVIEW_CHARS = 700
+_PROCESSOR = DocumentProcessor(chunk_size=1200, chunk_overlap=250, min_chunk_size=80)
 _LEXICON_CACHE: Dict[str, Tuple[float, Optional[List[Dict[str, Any]]]]] = {}
 
 LEGAL_EXPANSION_PROFILES = [
@@ -249,8 +250,8 @@ def _decision_metadata(decision: Any) -> Dict[str, Any]:
 def _normalize_embeddings(embeddings: np.ndarray) -> np.ndarray:
     embeddings = np.array(embeddings, dtype=np.float32)
     if embeddings.ndim == 1:
-        norm = np.linalg.norm(embeddings)
-        return embeddings / norm if norm > 0 else embeddings
+        norm = np.linalg.norm(embeddings) + 1e-8
+        return embeddings / norm
     norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
     return embeddings / (norms + 1e-8)
 
@@ -399,7 +400,6 @@ async def search_bedesten_deep_semantic(
         reverse=True,
     )[:max_fulltext_fetches]
 
-    processor = DocumentProcessor(chunk_size=1200, chunk_overlap=250, min_chunk_size=80)
     chunk_texts: List[str] = []
     chunk_records: List[Dict[str, Any]] = []
 
@@ -425,7 +425,7 @@ async def search_bedesten_deep_semantic(
             **candidate["metadata"],
             "source_url": source_url,
         }
-        chunks = processor.process_document(
+        chunks = _PROCESSOR.process_document(
             document_id=document_id,
             text=markdown,
             metadata=candidate_metadata.copy(),
@@ -450,7 +450,7 @@ async def search_bedesten_deep_semantic(
     diagnostics["chunk_count"] = len(chunk_records)
     if not chunk_records:
         return _semantic_response(
-            "embedding_error",
+            "chunking_error",
             "No fetched document content could be chunked for semantic ranking.",
             start_time,
             diagnostics,
@@ -460,12 +460,25 @@ async def search_bedesten_deep_semantic(
             results=[],
         )
 
-    query_embedding = _normalize_embeddings(
-        await asyncio.to_thread(embedder.encode_query, question, "legal issue retrieval")
-    )
-    chunk_embeddings = _normalize_embeddings(
-        await asyncio.to_thread(embedder.encode_documents, chunk_texts)
-    )
+    try:
+        query_embedding = _normalize_embeddings(
+            await asyncio.to_thread(embedder.encode_query, question, "legal issue retrieval")
+        )
+        chunk_embeddings = _normalize_embeddings(
+            await asyncio.to_thread(embedder.encode_documents, chunk_texts)
+        )
+    except Exception as e:
+        logger.warning("Deep semantic embedding failed: %s", e)
+        return _semantic_response(
+            "embedding_error",
+            "Embedding request failed during deep semantic ranking.",
+            start_time,
+            diagnostics,
+            court_type=court_type_value,
+            generated_queries=generated_queries,
+            expansion=expansion,
+            results=[],
+        )
     if len(query_embedding.shape) == 1:
         query_embedding = query_embedding.reshape(1, -1)
     similarities = np.atleast_1d(np.dot(chunk_embeddings, query_embedding.T).squeeze())

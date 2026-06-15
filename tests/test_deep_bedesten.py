@@ -78,6 +78,8 @@ class FakeBedestenClient:
         return BedestenDocumentMarkdown(
             documentId=document_id,
             markdown_content=self.documents[document_id],
+            # Deliberately wrong domain: the deep search result must keep the
+            # Bedesten metadata URL instead of leaking this legacy client URL.
             source_url=f"https://mevzuat.adalet.gov.tr/ictihat/{document_id}",
             mime_type="text/html",
         )
@@ -152,6 +154,18 @@ class UnnormalizedMagnitudeEmbedder:
             else:
                 embeddings.append([100.0, 100.0])
         return np.array(embeddings, dtype=np.float32)
+
+
+class FailingEmbedder:
+    dimension = 2
+    model = "failing-test-embedder"
+    provider = "test"
+
+    def encode_query(self, query: str, task: str = "search result"):
+        raise RuntimeError("embedding provider unavailable")
+
+    def encode_documents(self, documents, titles=None):
+        raise AssertionError("documents should not be encoded after query failure")
 
 
 class BedestenDeepSemanticTests(unittest.IsolatedAsyncioTestCase):
@@ -291,6 +305,25 @@ class BedestenDeepSemanticTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response["status"], "success")
         self.assertEqual(response["results"][0]["document_id"], "relevant")
+
+    async def test_deep_semantic_search_returns_structured_embedding_error(self):
+        client = FakeBedestenClient()
+
+        response = await search_bedesten_deep_semantic(
+            bedesten_client=client,
+            embedder=FailingEmbedder(),
+            question="Alfa işlemi sonrası beta zararı için benzer kararlar.",
+            court_type="YARGITAYKARARI",
+            seed_terms=["alfa işlemi", "beta zararı"],
+            max_queries=2,
+            max_search_results=20,
+            max_fulltext_fetches=2,
+            top_k=2,
+        )
+
+        self.assertEqual(response["status"], "embedding_error")
+        self.assertEqual(response["results"], [])
+        self.assertEqual(response["court_type"], "YARGITAYKARARI")
 
 
 if __name__ == "__main__":
