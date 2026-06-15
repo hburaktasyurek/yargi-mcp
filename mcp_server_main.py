@@ -274,6 +274,7 @@ if SEMANTIC_SEARCH_AVAILABLE:
     from semantic_search.embedder import get_embedder
     from semantic_search.vector_store import VectorStore
     from semantic_search.processor import DocumentProcessor
+    from semantic_search.deep_bedesten import search_bedesten_deep_semantic as run_bedesten_deep_semantic
     provider = "local" if is_local_embedding_configured() else "openrouter"
     logger.info(f"Semantic search enabled (provider={provider})")
 else:
@@ -1306,6 +1307,87 @@ async def get_bedesten_document_markdown(
 # --- Semantic Search Tool (Conditional - requires an embedding provider) ---
 if SEMANTIC_SEARCH_AVAILABLE:
     from semantic_search.embedder import get_embedding_request_timeout_s
+
+    @app.tool(
+        description=(
+            "Use this for deeper semantic legal research inside exactly ONE Bedesten court type. "
+            "Pick only the court the user asked for: YARGITAYKARARI for Yargıtay, ISTINAFHUKUK for appeals courts, "
+            "DANISTAYKARAR only for administrative-law/Danıştay questions, YERELHUKUK for local civil courts, KYB for kanun yararına bozma. "
+            "Do not use this to search multiple court types in one call. The tool expands the legal issue, gathers bounded candidates from the selected court, "
+            "fetches at most 25 full texts sequentially to respect Bedesten rate limits, then ranks document chunks semantically."
+        ),
+        annotations={
+            "readOnlyHint": True,
+            "openWorldHint": True,
+            "idempotentHint": True
+        }
+    )
+    async def search_bedesten_deep_semantic(
+        question: str = Field(..., description=(
+            "Natural-language legal issue in Turkish. Write the facts and relief sought, not just keywords. "
+            "Include the concrete event, legal relationship, and requested remedy when known."
+        )),
+        court_type: BedestenCourtTypeEnum = Field(..., description=(
+            "Exactly one court type. Use YARGITAYKARARI for Yargıtay; ISTINAFHUKUK for appeals courts; "
+            "DANISTAYKARAR only if the user specifically needs Danıştay/administrative law; YERELHUKUK for local courts; KYB for kanun yararına bozma."
+        )),
+        seed_terms: List[str] = Field(default=[], description=(
+            "Optional user-provided legal terms to force into expansion. Keep each term short and specific."
+        )),
+        max_queries: int = Field(8, ge=1, le=8, description="Maximum expanded Bedesten queries. Hard cap is 8 to protect rate limits."),
+        max_search_results: int = Field(50, ge=1, le=50, description="Maximum unique metadata candidates to keep before full-text fetch. Hard cap is 50."),
+        max_fulltext_fetches: int = Field(20, ge=1, le=25, description="Maximum full documents to fetch and chunk. Hard cap is 25; lower is safer for Bedesten rate limits."),
+        top_k: int = Field(8, ge=1, le=25, description="Number of document-level semantic results to return."),
+        use_expansion: bool = Field(True, description="Keep true for legal issue expansion. Set false only when question is already a precise Bedesten query.")
+    ) -> Dict[str, Any]:
+        court_type_value = getattr(court_type, "value", str(court_type))
+        logger.info(
+            "Tool 'search_bedesten_deep_semantic' called: court_type=%s, max_queries=%s, max_search_results=%s, max_fulltext_fetches=%s",
+            court_type_value,
+            max_queries,
+            max_search_results,
+            max_fulltext_fetches,
+        )
+
+        try:
+            return await run_bedesten_deep_semantic(
+                bedesten_client=bedesten_client_instance,
+                embedder=get_embedder(),
+                question=question,
+                court_type=court_type,
+                seed_terms=seed_terms,
+                max_queries=max_queries,
+                max_search_results=max_search_results,
+                max_fulltext_fetches=max_fulltext_fetches,
+                top_k=top_k,
+                use_expansion=use_expansion,
+            )
+        except BedestenRateLimited as e:
+            retry_after = f"{e.retry_after:.1f}"
+            logger.warning("Bedesten local rate-limit bucket full during deep semantic search; retry-after=%ss", retry_after)
+            return {
+                "status": "rate_limit_exceeded",
+                "message": "Bedesten rate limit reached during deep semantic search. Wait retry_after seconds and retry with smaller limits.",
+                "retry_after": retry_after,
+                "court_type": court_type_value,
+                "results": [],
+            }
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 429:
+                retry_after = e.response.headers.get("Retry-After", "")
+                logger.warning("Bedesten API 429 during deep semantic search; retry-after=%r", retry_after)
+                return {
+                    "status": "rate_limit_exceeded",
+                    "message": "Bedesten API rate limit reached during deep semantic search. Wait retry_after seconds and retry with smaller limits.",
+                    "retry_after": retry_after,
+                    "court_type": court_type_value,
+                    "results": [],
+                }
+            logger.exception("Error in tool 'search_bedesten_deep_semantic'")
+            raise
+        except Exception:
+            logger.exception("Error in tool 'search_bedesten_deep_semantic'")
+            raise
 
     def _semantic_float_env(name: str, default: float, minimum: float, maximum: float) -> float:
         raw_value = os.getenv(name)

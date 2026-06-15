@@ -311,15 +311,37 @@ API anahtarınızı [openrouter.ai/keys](https://openrouter.ai/keys) adresinden 
 | `SEMANTIC_CALL_TIMEOUT_S` | Her Bedesten search/fetch çağrısı için timeout (3-30 arası clamp edilir) | `12` |
 | `EMBEDDING_REQUEST_TIMEOUT_S` | Embedding API çağrısı timeout'u (5-60 arası clamp edilir) | `20` |
 | `EMBEDDING_MAX_RETRIES` | Embedding API retry sayısı (0-3 arası clamp edilir) | `1` |
+| `BEDESTEN_DEEP_LEXICON_PATH` | Opsiyonel JSON hukuk kavram sözlüğü yolu (`name`, `triggers`, `terms`) | `/path/to/lexicon.json` |
 
-> 💡 **Not:** Hiçbir embedding sağlayıcı yapılandırılmazsa semantik arama aracı görünmez, diğer 26 araç normal şekilde çalışır. `allow_broad_search=True` ile 3+ court type seçmek ve eşzamanlı semantik çağrılar `partial_timeout` olasılığını artırır.
+### Deep Semantic Bedesten Search
+
+`search_bedesten_deep_semantic`, mevcut hızlı `search_bedesten_semantic` aracından farklıdır:
+
+- Tek çağrıda **yalnızca bir** `court_type` kabul eder; modelin gereksiz Danıştay/Yargıtay/İstinaf karışımı yapmasını engeller.
+- Önce kontrollü query expansion ile seçilen kaynak içinde sınırlı aday toplar.
+- Bedesten rate limitlerini korumak için full-text fetch işlemlerini sıralı yapar ve en fazla 25 belge çeker.
+- Tam metinleri chunk'lara böler, chunk embedding'leri üzerinden karar bazlı skor üretir.
+
+Opsiyonel dış sözlük formatı:
+
+```json
+[
+  {
+    "name": "profile_name",
+    "triggers": ["kullanıcı sorgusunda yakalanacak ifade"],
+    "terms": ["aranacak hukuki kavram", "yakın hukuki mesele"]
+  }
+]
+```
+
+> 💡 **Not:** Hiçbir embedding sağlayıcı yapılandırılmazsa semantik arama araçları görünmez, diğer 26 araç normal şekilde çalışır. Geniş veya eşzamanlı semantik çağrılar `partial_timeout` veya Bedesten 429 riskini artırır.
 
 </details>
 
 <details>
 <summary>🛠️ <strong>Kullanılabilir Araçlar (MCP Tools)</strong></summary>
 
-Bu FastMCP sunucusu **26 aktif MCP aracı** + **1 opsiyonel semantik arama aracı** sunar (token verimliliği için optimize edilmiş):
+Bu FastMCP sunucusu **26 aktif MCP aracı** + **2 opsiyonel semantik arama aracı** sunar (token verimliliği için optimize edilmiş):
 
 ### **Yargıtay Araçları (Birleşik Bedesten API - Token Optimized)**
 *Not: Yargıtay araçları token verimliliği için birleşik Bedesten API'ye entegre edilmiştir*

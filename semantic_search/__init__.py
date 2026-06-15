@@ -10,6 +10,11 @@ from .embedder import (
 )
 from .vector_store import VectorStore
 from .processor import DocumentProcessor
+from .deep_bedesten import (
+    generate_bedesten_deep_queries,
+    load_legal_expansion_profiles,
+    search_bedesten_deep_semantic,
+)
 
 __all__ = [
     'OpenRouterEmbedder',
@@ -20,4 +25,7 @@ __all__ = [
     'is_semantic_search_available',
     'VectorStore',
     'DocumentProcessor',
+    'generate_bedesten_deep_queries',
+    'load_legal_expansion_profiles',
+    'search_bedesten_deep_semantic',
 ]
