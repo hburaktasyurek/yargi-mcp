@@ -280,10 +280,10 @@ async def search_bedesten_deep_semantic(
     question: str,
     court_type: BedestenCourtTypeEnum,
     seed_terms: Optional[List[str]] = None,
-    max_queries: int = 8,
-    max_search_results: int = 50,
-    max_fulltext_fetches: int = 20,
-    top_k: int = 8,
+    max_queries: int = 3,
+    max_search_results: int = 20,
+    max_fulltext_fetches: int = 8,
+    top_k: int = 5,
     use_expansion: bool = True,
 ) -> Dict[str, Any]:
     """Search one Bedesten court type deeply, then rank fetched chunks semantically.
