@@ -1102,7 +1102,7 @@ async def get_rekabet_kurumu_document(
 @app.tool(
     description=(
         "Use this for Turkish court decision records from Yargıtay, Danıştay, Local Courts, Appeals Courts, and KYB via Bedesten. "
-        "Prefer narrow court_types over all courts. pageSize is intentionally fixed to 10 results per page. "
+        "Prefer narrow court_types over all courts. Default pageSize is 100 to reduce unnecessary pagination. "
         "Bedesten is upstream rate-limited; avoid parallel repeated calls and wait retry_after seconds after 429 responses."
     ),
     annotations={
@@ -1127,8 +1127,8 @@ For best results, use exact phrases with quotes for legal terms."""),
         default=["YARGITAYKARARI", "DANISTAYKARAR"], 
         description="Court types: YARGITAYKARARI, DANISTAYKARAR, YERELHUKUK, ISTINAFHUKUK, KYB"
     ),
-    # pageSize: int = Field(10, ge=1, le=10, description="Results per page (1-10)"),
-    pageNumber: int = Field(1, ge=1, description="Page number. Each page returns 10 results; pageSize is fixed by the server."),
+    pageSize: int = Field(100, ge=1, le=100, description="Results per page (1-100). Default 100 reduces page-by-page loops for relevant first-page searches."),
+    pageNumber: int = Field(1, ge=1, description="Page number. Use pageNumber > 1 only when the first 100 results are insufficient."),
     birimAdi: BirimAdiEnum = Field("ALL", description="""
         Chamber filter (optional). Abbreviated values with Turkish names:
         • Yargıtay: H1-H23 (1-23. Hukuk Dairesi), C1-C23 (1-23. Ceza Dairesi), HGK (Hukuk Genel Kurulu), CGK (Ceza Genel Kurulu), BGK (Büyük Genel Kurulu), HBK (Hukuk Daireleri Başkanlar Kurulu), CBK (Ceza Daireleri Başkanlar Kurulu)
@@ -1139,7 +1139,7 @@ For best results, use exact phrases with quotes for legal terms."""),
 ) -> dict:
     """Search Turkish legal databases via unified Bedesten API."""
     
-    pageSize = 10  # Default value
+    pageSize = max(1, min(int(pageSize), 100))
     
     # Convert date formats if provided
     # Accept formats: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS.000Z
@@ -1165,7 +1165,7 @@ For best results, use exact phrases with quotes for legal terms."""),
     
     search_request = BedestenSearchRequest(data=search_data)
     
-    logger.info(f"Searching bedesten: phrase='{phrase}', court_types={court_types}, birimAdi='{birimAdi}', page={pageNumber}")
+    logger.info(f"Searching bedesten: phrase='{phrase}', court_types={court_types}, birimAdi='{birimAdi}', page={pageNumber}, pageSize={pageSize}")
     
     try:
         response = await bedesten_client_instance.search_documents(search_request)
@@ -1335,8 +1335,8 @@ if SEMANTIC_SEARCH_AVAILABLE:
             "Optional user-provided legal terms to force into expansion. Keep each term short and specific."
         )),
         max_queries: int = Field(3, ge=1, le=8, description="Maximum expanded Bedesten queries. Default is 3; hard cap is 8 to protect rate limits."),
-        max_search_results: int = Field(20, ge=1, le=50, description="Maximum unique metadata candidates to keep before full-text fetch. Default is 20; hard cap is 50."),
-        max_fulltext_fetches: int = Field(8, ge=1, le=25, description="Maximum full documents to fetch and chunk. Default is 8; hard cap is 25."),
+        max_search_results: int = Field(20, ge=1, le=50, description="Maximum unique metadata candidates to collect before full-text fetch. Also controls Bedesten search pageSize per expanded query, up to 50 here. Default is 20."),
+        max_fulltext_fetches: int = Field(8, ge=1, le=25, description="Maximum full documents to fetch and chunk after metadata collection. This stays separate from max_search_results to keep Bedesten document fetches bounded. Default is 8; hard cap is 25."),
         top_k: int = Field(5, ge=1, le=25, description="Number of document-level semantic results to return."),
         use_expansion: bool = Field(True, description="Keep true for legal issue expansion. Set false only when question is already a precise Bedesten query.")
     ) -> Dict[str, Any]:
@@ -1539,8 +1539,8 @@ if SEMANTIC_SEARCH_AVAILABLE:
 
     @app.tool(
         description=(
-            "Use this to semantically re-rank a small candidate set of Turkish court decision records from Bedesten. "
-            "This is not a broad search tool: default scope is Yargıtay + Appeals Court decisions, top_k/max_candidates default to 8, "
+            "Use this to semantically re-rank a bounded candidate set of Turkish court decision records from Bedesten. "
+            "This is not a broad search tool: default scope is Yargıtay + Appeals Court decisions, max_candidates controls the Bedesten metadata search pageSize and document fetch cap, "
             "and results is returned only after embedding re-ranking succeeds. Timeout/error responses use candidates_preview instead. "
             "Set allow_broad_search=True only when intentionally searching 3+ court types; broad or concurrent semantic searches increase partial_timeout risk."
         ),
@@ -1586,7 +1586,7 @@ YANLIŞ KULLANIM:
             )
         ),
         top_k: int = Field(8, ge=1, le=20, description="Number of semantically ranked results to return (1-20). Must be <= max_candidates."),
-        max_candidates: int = Field(8, ge=1, le=20, description="Maximum number of document bodies to fetch and embed (1-20)."),
+        max_candidates: int = Field(8, ge=1, le=20, description="Candidate window size (1-20). The tool asks Bedesten for this many metadata results per court in one call, then fetches and embeds at most this many document bodies."),
         allow_broad_search: bool = Field(False, description="Set true to allow searching 3 or more court types; this increases partial_timeout risk.")
     ) -> Dict[str, Any]:
         """
@@ -1664,8 +1664,8 @@ YANLIŞ KULLANIM:
                     data=BedestenSearchData(
                         phrase=keyword,
                         itemTypeList=[court_type],
-                        # Bedesten caps pageSize at 10; max_candidates may be lower.
-                        pageSize=min(10, max_candidates),
+                        # Request the full bounded candidate window in one Bedesten call.
+                        pageSize=min(100, max_candidates),
                         pageNumber=1
                     )
                 )

@@ -343,7 +343,7 @@ async def search_bedesten_deep_semantic(
     for query in generated_queries:
         if len(candidates_by_id) >= max_search_results:
             break
-        page_size = min(10, max_search_results - len(candidates_by_id))
+        page_size = min(100, max_search_results - len(candidates_by_id))
         try:
             search_response = await bedesten_client.search_documents(
                 BedestenSearchRequest(

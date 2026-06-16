@@ -118,6 +118,48 @@ class ManyCandidateBedestenClient:
         )
 
 
+class RelevantAfterFirstTenBedestenClient:
+    def __init__(self):
+        self.search_requests = []
+        self.fetched_ids = []
+
+    async def search_documents(self, search_request):
+        self.search_requests.append(search_request)
+        requested_size = search_request.data.pageSize
+        return BedestenSearchResponse(
+            data=BedestenSearchDataResponse(
+                emsalKararList=[
+                    decision("relevant" if index == 20 else f"doc-{index}")
+                    for index in range(requested_size)
+                ],
+                total=100,
+                start=0,
+            ),
+            metadata={},
+        )
+
+    async def get_document_as_markdown(self, document_id: str):
+        self.fetched_ids.append(document_id)
+        if document_id == "relevant":
+            markdown = (
+                "Alfa işlemi beta zararı bakımından doğrudan ilgili karar. "
+                "Mahkeme alfa işlemi sonrasında ortaya çıkan beta zararı için "
+                "sorumluluğun nasıl değerlendirileceğini ayrıntılı biçimde tartışmıştır."
+            )
+        else:
+            markdown = (
+                "Bu karar ticari kira sözleşmesinden doğan uyarlama talebi ve "
+                "temerrüt nedeniyle tahliye istemine ilişkindir. Uyuşmazlıkta kira "
+                "bedelinin belirlenmesi ve sözleşme hükümlerinin uygulanması tartışılmıştır."
+            )
+        return BedestenDocumentMarkdown(
+            documentId=document_id,
+            markdown_content=markdown,
+            source_url=f"https://mevzuat.adalet.gov.tr/ictihat/{document_id}",
+            mime_type="text/html",
+        )
+
+
 class KeywordEmbedder:
     dimension = 2
     model = "keyword-test-embedder"
@@ -287,6 +329,27 @@ class BedestenDeepSemanticTests(unittest.IsolatedAsyncioTestCase):
                 for request in client.search_requests
             )
         )
+
+    async def test_deep_semantic_search_uses_requested_metadata_window_before_fetch_limit(self):
+        client = RelevantAfterFirstTenBedestenClient()
+
+        response = await search_bedesten_deep_semantic(
+            bedesten_client=client,
+            embedder=KeywordEmbedder(),
+            question="Alfa işlemi beta zararı",
+            court_type="YARGITAYKARARI",
+            max_queries=1,
+            max_search_results=50,
+            max_fulltext_fetches=25,
+            top_k=1,
+            use_expansion=False,
+        )
+
+        self.assertEqual(response["status"], "success")
+        self.assertEqual(client.search_requests[0].data.pageSize, 50)
+        self.assertIn("relevant", client.fetched_ids)
+        self.assertLessEqual(len(client.fetched_ids), 25)
+        self.assertEqual(response["results"][0]["document_id"], "relevant")
 
     async def test_deep_semantic_search_normalizes_embedder_outputs_before_scoring(self):
         client = FakeBedestenClient()
