@@ -319,7 +319,7 @@ API anahtarınızı [openrouter.ai/keys](https://openrouter.ai/keys) adresinden 
 
 - Tek çağrıda **yalnızca bir** `court_type` kabul eder; modelin gereksiz Danıştay/Yargıtay/İstinaf karışımı yapmasını engeller.
 - Önce kontrollü query expansion ile seçilen kaynak içinde sınırlı aday toplar.
-- Bedesten rate limitlerini korumak için full-text fetch işlemlerini sıralı yapar ve en fazla 25 belge çeker.
+- Bedesten rate limitlerini korumak için full-text fetch işlemlerini sıralı yapar; varsayılan olarak 8, en fazla 25 belge çeker.
 - Tam metinleri chunk'lara böler, chunk embedding'leri üzerinden karar bazlı skor üretir.
 
 Opsiyonel dış sözlük formatı:

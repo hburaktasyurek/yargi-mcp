@@ -1334,10 +1334,10 @@ if SEMANTIC_SEARCH_AVAILABLE:
         seed_terms: List[str] = Field(default=[], description=(
             "Optional user-provided legal terms to force into expansion. Keep each term short and specific."
         )),
-        max_queries: int = Field(8, ge=1, le=8, description="Maximum expanded Bedesten queries. Hard cap is 8 to protect rate limits."),
-        max_search_results: int = Field(50, ge=1, le=50, description="Maximum unique metadata candidates to keep before full-text fetch. Hard cap is 50."),
-        max_fulltext_fetches: int = Field(20, ge=1, le=25, description="Maximum full documents to fetch and chunk. Hard cap is 25; lower is safer for Bedesten rate limits."),
-        top_k: int = Field(8, ge=1, le=25, description="Number of document-level semantic results to return."),
+        max_queries: int = Field(3, ge=1, le=8, description="Maximum expanded Bedesten queries. Default is 3; hard cap is 8 to protect rate limits."),
+        max_search_results: int = Field(20, ge=1, le=50, description="Maximum unique metadata candidates to keep before full-text fetch. Default is 20; hard cap is 50."),
+        max_fulltext_fetches: int = Field(8, ge=1, le=25, description="Maximum full documents to fetch and chunk. Default is 8; hard cap is 25."),
+        top_k: int = Field(5, ge=1, le=25, description="Number of document-level semantic results to return."),
         use_expansion: bool = Field(True, description="Keep true for legal issue expansion. Set false only when question is already a precise Bedesten query.")
     ) -> Dict[str, Any]:
         court_type_value = getattr(court_type, "value", str(court_type))
