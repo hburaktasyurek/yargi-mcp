@@ -18,7 +18,7 @@ BedestenCourtTypeEnum = Literal[
 
 # Search Request Models
 class BedestenSearchData(BaseModel):
-    pageSize: int = Field(..., description="Results per page (1-10)")
+    pageSize: int = Field(..., description="Results per page (1-100)")
     pageNumber: int = Field(..., description="Page number (1-indexed)")
     itemTypeList: List[str] = Field(..., description="Court type filter (YARGITAYKARARI/DANISTAYKARAR/YERELHUKUK/ISTINAFHUKUK/KYB)")
     phrase: str = Field(..., description="Search phrase. Supports: 'word', \"exact phrase\", +required, -exclude, AND/OR/NOT operators. No wildcards or regex.")
