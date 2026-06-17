@@ -28,6 +28,8 @@ POLICY_TIGHT_PAGE = "tight_page"
 POLICY_LOOSE_PAGES = "loose_pages"
 POLICY_WINDOWED_LOOSE_PAGES = "windowed_loose_pages"
 POLICIES = {POLICY_TIGHT_PAGE, POLICY_LOOSE_PAGES, POLICY_WINDOWED_LOOSE_PAGES}
+DEFAULT_MAX_PROBE_SEARCHES = 4
+MAX_PROBE_SEARCHES_HARD_CAP = 4
 
 ALLOWED_COURT_TYPES = {
     "YARGITAYKARARI",
@@ -110,6 +112,20 @@ def _build_windows(
 
 def _required_terms(candidate: str) -> List[str]:
     return [f"+{part}" for part in str(candidate).split() if part.strip()]
+
+
+def _required_base_query(base_query: str) -> str:
+    parts = [part for part in str(base_query).split() if part.strip()]
+    if not parts:
+        return ""
+    if any(
+        part.startswith(("+", "-"))
+        or part.upper() in {"AND", "OR", "NOT"}
+        or '"' in part
+        for part in parts
+    ):
+        return str(base_query).strip()
+    return " ".join(_required_terms(base_query))
 
 
 def _append_discriminators(base_query: str, discriminators: List[str]) -> str:
@@ -441,7 +457,7 @@ async def run_bedesten_count_guided_retrieval(
     policy: str = POLICY_LOOSE_PAGES,
     min_total_floor: int = 1,
     page_size: int = 100,
-    max_probe_searches: int = 12,
+    max_probe_searches: int = DEFAULT_MAX_PROBE_SEARCHES,
     max_pages_per_final_query: int = 2,
     max_window_searches: int = 0,
     max_fulltext_fetches: int = 10,
@@ -454,7 +470,7 @@ async def run_bedesten_count_guided_retrieval(
     policy = str(policy or "").strip()
     min_total_floor = max(1, int(min_total_floor))
     page_size = max(1, min(int(page_size), 100))
-    max_probe_searches = max(0, min(int(max_probe_searches), 50))
+    max_probe_searches = max(0, min(int(max_probe_searches), MAX_PROBE_SEARCHES_HARD_CAP))
     max_pages_per_final_query = max(1, min(int(max_pages_per_final_query), 10))
     max_window_searches = max(0, min(int(max_window_searches), 20))
     max_fulltext_fetches = max(0, min(int(max_fulltext_fetches), 50))
@@ -492,7 +508,7 @@ async def run_bedesten_count_guided_retrieval(
 
     response = _response_template(
         base_query=base_query,
-        selected_query=base_query,
+        selected_query=_required_base_query(base_query),
         policy=policy,
         min_total_floor=min_total_floor,
         court_types=court_type_values,
@@ -507,11 +523,12 @@ async def run_bedesten_count_guided_retrieval(
         max_fulltext_fetches=max_fulltext_fetches,
     )
     diagnostics = response["diagnostics"]
+    required_base_query = response["query"]["selected_query"]
 
     try:
         base_search = await _search(
             bedesten_client,
-            phrase=base_query,
+            phrase=required_base_query,
             court_types=court_type_values,
             page_size=page_size,
             page_number=1,
@@ -523,7 +540,7 @@ async def run_bedesten_count_guided_retrieval(
         base_total = _response_total(base_search)
         diagnostics["totals"]["base"] = base_total
 
-        selected_query = base_query
+        selected_query = required_base_query
         selected_discriminators: List[str] = []
         selected_total = base_total
         base_fits_policy = min_total_floor <= base_total <= _policy_limit(
@@ -534,7 +551,7 @@ async def run_bedesten_count_guided_retrieval(
         if discriminator_candidates and max_probe_searches > 0 and not base_fits_policy:
             selected_query, selected_discriminators, probed_total, stop_reached = await _probe_policy(
                 bedesten_client,
-                base_query=base_query,
+                base_query=required_base_query,
                 discriminator_candidates=discriminator_candidates,
                 court_types=court_type_values,
                 policy=policy,
@@ -551,7 +568,7 @@ async def run_bedesten_count_guided_retrieval(
             if stop_reached:
                 selected_total = probed_total if probed_total is not None else base_total
             else:
-                selected_query = base_query
+                selected_query = required_base_query
                 selected_discriminators = []
                 selected_total = base_total
 

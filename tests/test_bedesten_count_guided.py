@@ -51,8 +51,8 @@ class CountGuidedFakeClient:
         page_number = search_request.data.pageNumber
 
         totals_by_phrase = {
-            "alfa konu": 300,
-            "alfa konu +beta +zarar": 120,
+            "+alfa +konu": 300,
+            "+alfa +konu +beta +zarar": 120,
         }
         total = totals_by_phrase[phrase]
         start = (page_number - 1) * search_request.data.pageSize
@@ -86,10 +86,10 @@ class PolicySelectionFakeClient:
         self.search_requests.append(search_request)
         phrase = search_request.data.phrase
         total = {
-            "lambda konu": 500,
-            "lambda konu +dar": 10,
-            "lambda konu +orta": 80,
-            "lambda konu +genis": 95,
+            "+lambda +konu": 500,
+            "+lambda +konu +dar": 10,
+            "+lambda +konu +orta": 80,
+            "+lambda +konu +genis": 95,
         }[phrase]
         return BedestenSearchResponse(
             data=BedestenSearchDataResponse(
@@ -118,8 +118,8 @@ class BudgetExhaustedFakeClient:
         phrase = search_request.data.phrase
         page_number = search_request.data.pageNumber
         total = {
-            "theta konu": 500,
-            "theta konu +bir": 300,
+            "+theta +konu": 500,
+            "+theta +konu +bir": 300,
         }[phrase]
         return BedestenSearchResponse(
             data=BedestenSearchDataResponse(
@@ -148,7 +148,7 @@ class WindowedFakeClient:
         phrase = search_request.data.phrase
         start = search_request.data.kararTarihiStart
         total = 360
-        if phrase == "omega konu +kalem":
+        if phrase == "+omega +konu +kalem":
             total = 250
         if start:
             total = 40
@@ -223,8 +223,8 @@ class NoReducingCandidateFakeClient:
         self.search_requests.append(search_request)
         phrase = search_request.data.phrase
         total = {
-            "upsilon konu": 100,
-            "upsilon konu +artiran": 140,
+            "+upsilon +konu": 100,
+            "+upsilon +konu +artiran": 140,
         }[phrase]
         return BedestenSearchResponse(
             data=BedestenSearchDataResponse(
@@ -244,7 +244,111 @@ class NoReducingCandidateFakeClient:
         )
 
 
+class RequiredBaseIntersectionFakeClient:
+    def __init__(self):
+        self.search_requests = []
+
+    async def search_documents(self, search_request):
+        self.search_requests.append(search_request)
+        phrase = search_request.data.phrase
+        total = {
+            "+alfa +konu": 500,
+            "+alfa +konu +zarar": 80,
+        }[phrase]
+        return BedestenSearchResponse(
+            data=BedestenSearchDataResponse(
+                emsalKararList=[decision(f"{phrase}-doc")],
+                total=total,
+                start=0,
+            ),
+            metadata={},
+        )
+
+    async def get_document_as_markdown(self, document_id: str):
+        raise AssertionError("documents should not be fetched")
+
+
+class ManyProbeFakeClient:
+    def __init__(self):
+        self.search_requests = []
+
+    async def search_documents(self, search_request):
+        self.search_requests.append(search_request)
+        phrase = search_request.data.phrase
+        total = 1000 if phrase == "+kapsamli +uyusmazlik" else 900
+        return BedestenSearchResponse(
+            data=BedestenSearchDataResponse(
+                emsalKararList=[decision("broad-doc")],
+                total=total,
+                start=0,
+            ),
+            metadata={},
+        )
+
+    async def get_document_as_markdown(self, document_id: str):
+        raise AssertionError("documents should not be fetched")
+
+
 class BedestenCountGuidedTests(unittest.IsolatedAsyncioTestCase):
+    async def test_plain_base_query_terms_are_required_for_count_probes(self):
+        client = RequiredBaseIntersectionFakeClient()
+
+        response = await run_bedesten_count_guided_retrieval(
+            bedesten_client=client,
+            base_query="alfa konu",
+            discriminator_candidates=["zarar"],
+            court_types=["YARGITAYKARARI"],
+            policy=POLICY_TIGHT_PAGE,
+            min_total_floor=1,
+            page_size=100,
+            max_probe_searches=3,
+            max_pages_per_final_query=1,
+            max_fulltext_fetches=0,
+        )
+
+        self.assertEqual(response["status"], "success")
+        self.assertEqual(response["query"]["base_query"], "alfa konu")
+        self.assertEqual(response["query"]["selected_query"], "+alfa +konu +zarar")
+        self.assertEqual(
+            [request.data.phrase for request in client.search_requests],
+            ["+alfa +konu", "+alfa +konu +zarar", "+alfa +konu +zarar"],
+        )
+
+    async def test_default_probe_budget_is_conservative_to_avoid_bedesten_bursts(self):
+        client = ManyProbeFakeClient()
+
+        response = await run_bedesten_count_guided_retrieval(
+            bedesten_client=client,
+            base_query="kapsamli uyusmazlik",
+            discriminator_candidates=[f"aday{i}" for i in range(10)],
+            court_types=["YARGITAYKARARI"],
+            policy=POLICY_TIGHT_PAGE,
+            page_size=100,
+            max_pages_per_final_query=1,
+            max_fulltext_fetches=0,
+        )
+
+        self.assertLessEqual(len(response["diagnostics"]["probes"]), 4)
+        self.assertEqual(response["diagnostics"]["budget"]["max_probe_searches"], 4)
+
+    async def test_explicit_large_probe_budget_is_clamped_to_bedesten_safe_cap(self):
+        client = ManyProbeFakeClient()
+
+        response = await run_bedesten_count_guided_retrieval(
+            bedesten_client=client,
+            base_query="kapsamli uyusmazlik",
+            discriminator_candidates=[f"aday{i}" for i in range(10)],
+            court_types=["YARGITAYKARARI"],
+            policy=POLICY_TIGHT_PAGE,
+            page_size=100,
+            max_probe_searches=12,
+            max_pages_per_final_query=1,
+            max_fulltext_fetches=0,
+        )
+
+        self.assertLessEqual(len(response["diagnostics"]["probes"]), 4)
+        self.assertEqual(response["diagnostics"]["budget"]["max_probe_searches"], 4)
+
     async def test_loose_policy_uses_v1_schema_and_required_term_candidate_pool(self):
         client = CountGuidedFakeClient()
 
@@ -266,13 +370,13 @@ class BedestenCountGuidedTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response["schema_version"], SCHEMA_VERSION)
         self.assertEqual(response["status"], "success")
         self.assertEqual(response["query"]["selected_policy"], POLICY_LOOSE_PAGES)
-        self.assertEqual(response["query"]["selected_query"], "alfa konu +beta +zarar")
+        self.assertEqual(response["query"]["selected_query"], "+alfa +konu +beta +zarar")
         self.assertEqual(response["query"]["min_total_floor"], 1)
         self.assertEqual(response["query"]["eval_reference_date"], "2026-06-17")
         self.assertEqual(len(response["candidate_document_ids"]), 4)
         self.assertEqual(len(response["fetched_documents"]), 1)
         self.assertNotEqual(response["candidate_document_ids"], [doc["document_id"] for doc in response["fetched_documents"]])
-        self.assertEqual(client.search_requests[1].data.phrase, "alfa konu +beta +zarar")
+        self.assertEqual(client.search_requests[1].data.phrase, "+alfa +konu +beta +zarar")
         self.assertEqual(client.search_requests[-1].data.pageNumber, 2)
         self.assertEqual(client.fetched_ids, [response["candidate_document_ids"][0]])
 
@@ -293,7 +397,7 @@ class BedestenCountGuidedTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response["status"], "success")
         self.assertEqual(response["query"]["selected_policy"], POLICY_TIGHT_PAGE)
-        self.assertEqual(response["query"]["selected_query"], "lambda konu +genis")
+        self.assertEqual(response["query"]["selected_query"], "+lambda +konu +genis")
         self.assertEqual(response["diagnostics"]["selected_discriminators"], ["genis"])
         self.assertIn(
             {"candidate": "dar", "reason": "below_min_total_floor"},
@@ -317,10 +421,10 @@ class BedestenCountGuidedTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(response["status"], "partial")
-        self.assertEqual(response["query"]["selected_query"], "theta konu")
+        self.assertEqual(response["query"]["selected_query"], "+theta +konu")
         self.assertEqual(response["diagnostics"]["budget"]["exhausted"], True)
         self.assertEqual(response["diagnostics"]["truncation"]["reason"], "page_budget")
-        self.assertEqual(client.search_requests[-1].data.phrase, "theta konu")
+        self.assertEqual(client.search_requests[-1].data.phrase, "+theta +konu")
 
     async def test_windowed_policy_uses_eval_reference_date_and_stable_window_ids(self):
         client = WindowedFakeClient()
@@ -438,7 +542,7 @@ class BedestenCountGuidedTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(response["status"], "partial")
-        self.assertEqual(response["query"]["selected_query"], "upsilon konu")
+        self.assertEqual(response["query"]["selected_query"], "+upsilon +konu")
         self.assertEqual(response["diagnostics"]["budget"]["exhausted"], False)
         self.assertIn("no_reducing_candidate", response["diagnostics"]["errors"])
 
@@ -514,8 +618,9 @@ class BedestenCountGuidedEvalTests(unittest.TestCase):
         ]
         fixtures = [
             {"phrase": "rho konu", "page_number": 1, "total": 250, "document_ids": ["base-1"]},
-            {"phrase": "rho konu +ek", "page_number": 1, "total": 120, "document_ids": ["target"]},
-            {"phrase": "rho konu +ek", "page_number": 2, "total": 120, "document_ids": ["target-2"]},
+            {"phrase": "+rho +konu", "page_number": 1, "total": 250, "document_ids": ["base-1"]},
+            {"phrase": "+rho +konu +ek", "page_number": 1, "total": 120, "document_ids": ["target"]},
+            {"phrase": "+rho +konu +ek", "page_number": 2, "total": 120, "document_ids": ["target-2"]},
             {"phrase": "rho konu", "page_number": 2, "total": 250, "document_ids": ["base-2"]},
             {"phrase": "rho konu", "page_number": 3, "total": 250, "document_ids": ["target"]},
             {"phrase": "rho konu", "page_number": 4, "total": 250, "document_ids": ["base-4"]},

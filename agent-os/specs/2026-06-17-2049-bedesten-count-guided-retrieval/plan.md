@@ -5,8 +5,8 @@
 - [ ] The spike has an explicit measurement phase before production MCP exposure; synthetic tests validate code paths only and are not accepted as retrieval-quality evidence.
 - [ ] Budget defaults other than Bedesten `pageSize=100` are treated as experimental until derived from measurement on real or equivalent live-corpus scenarios.
 - [ ] The final selected query uses `pageSize=100` unless a lower value is explicitly configured, and never exceeds Bedesten's supported maximum of 100.
-- [ ] Phrase assembly is explicit: discriminators are emitted as atomic required `+term` tokens by default, not plain concatenation or exact-phrase matching.
-- [ ] The selection loop uses a global probe budget and greedy single-discriminator steps; it does not run beam search or unconstrained combinations.
+- [ ] Phrase assembly is explicit: plain base-query terms and discriminators are emitted as atomic required `+term` tokens by default, not plain concatenation or exact-phrase matching.
+- [ ] The selection loop uses a small global probe budget and greedy single-discriminator steps; it does not run beam search, unconstrained combinations, or caller-requested probe bursts above the server cap.
 - [ ] The loop rejects `total == 0` probes and avoids selecting the tightest total blindly; it optimizes for measured recall, not merely `total <= page_size`.
 - [ ] If the selected query has `total > page_size`, the tool fetches additional pages before using date-window fallback.
 - [ ] If configured pages and windows do not cover the selected total, the response marks the candidate pool as incomplete/truncated loudly.
@@ -28,7 +28,7 @@
 3. Add a dev-only wrapper gated by `BEDESTEN_COUNT_GUIDED_EXPERIMENTAL=1` — `mcp_server_main.py` — and do not register the production MCP tool unless the measurement gate passes.
 4. Reuse existing Bedesten models — `bedesten_mcp_module/models.py` — construct `BedestenSearchRequest` and `BedestenSearchData` with `pageSize`, `pageNumber`, `itemTypeList`, `phrase`, `birimAdi`, and date filters.
 5. Implement page-size and budget clamps — `bedesten_mcp_module/count_guided.py` — clamp `page_size` to 1-100 and expose request-count estimates for probe, page, window, and full-text budgets.
-6. Implement phrase assembly — `bedesten_mcp_module/count_guided.py` — split multi-word discriminators into atomic `+term` required tokens by default; do not use exact phrase mode unless the eval protocol adds a separate named dimension.
+6. Implement phrase assembly — `bedesten_mcp_module/count_guided.py` — convert plain base-query terms and multi-word discriminators into atomic `+term` required tokens by default; preserve already-operator-bearing base queries; do not use exact phrase mode unless the eval protocol adds a separate named dimension.
 7. Implement greedy discriminator policies — `bedesten_mcp_module/count_guided.py` — implement `tight_page`, `loose_pages`, and `windowed_loose_pages` exactly as defined in shape.md, including the swept `min_total_floor`, tie-break order, and base-query fallback when no stack reaches the policy band.
 8. Implement limited pagination — `bedesten_mcp_module/count_guided.py` — fetch page 2 through `max_pages_per_final_query` only for the final selected query and only when `total` exceeds the first page.
 9. Implement fallback windowing — `bedesten_mcp_module/count_guided.py` — split explicit date bounds or the default `2000-01-01` to `eval_reference_date` or current-date span into equal-duration newest-to-oldest windows; enforce `max_window_searches`; emit stable window IDs `w0`, `w1`, ...

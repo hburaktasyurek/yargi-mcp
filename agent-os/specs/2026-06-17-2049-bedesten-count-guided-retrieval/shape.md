@@ -23,7 +23,7 @@ async def search_bedesten_count_guided(
     policy: str = "loose_pages",
     min_total_floor: int = 1,
     page_size: int = 100,
-    max_probe_searches: int = 12,
+    max_probe_searches: int = 4,
     max_pages_per_final_query: int = 2,
     max_window_searches: int = 0,
     max_fulltext_fetches: int = 10,
@@ -47,7 +47,7 @@ async def run_bedesten_count_guided_retrieval(
     policy: str = "loose_pages",
     min_total_floor: int = 1,
     page_size: int = 100,
-    max_probe_searches: int = 12,
+    max_probe_searches: int = 4,
     max_pages_per_final_query: int = 2,
     max_window_searches: int = 0,
     max_fulltext_fetches: int = 10,
@@ -176,16 +176,16 @@ Greedy selection is deterministic:
 6. If the stop band is never reached before `max_probe_searches`, return the recall-safer base-query pool instead of a narrowed-but-still-too-large stack. Mark `diagnostics.budget.exhausted=true` only when the probe budget was actually consumed; otherwise record `no_reducing_candidate` in `diagnostics.errors`. Set `diagnostics.truncation.is_truncated=true` only if the returned base-query pool also exceeds the configured page/window coverage.
 
 ## Phrase Assembly
-Atomic discriminator terms are emitted as required terms: `+term`. Multi-word discriminator candidates are split into atomic required terms by default, preserving only non-empty whitespace-delimited tokens. Required exact phrase mode is not a default branch; it may be added only as a separately named eval dimension after a syntax-only validation that the quoted phrase is accepted by Bedesten without 400/validation failure. The spike must not mix exact-phrase and atomic-split results under the same policy ID.
+Plain base-query terms and atomic discriminator terms are emitted as required terms: `+term`, so count probes measure the base-query intersection plus the candidate discriminator rather than discriminator-wide corpus frequency. Multi-word discriminator candidates are split into atomic required terms by default, preserving only non-empty whitespace-delimited tokens. If a caller supplies an already-operator-bearing base query (`+`, `-`, boolean operator, or quoted phrase), preserve it instead of blindly rewriting it. Required exact phrase mode is not a default branch; it may be added only as a separately named eval dimension after a syntax-only validation that the quoted phrase is accepted by Bedesten without 400/validation failure. The spike must not mix exact-phrase and atomic-split results under the same policy ID.
 
 ## Date Windows
 If `max_window_searches > 0` and no date bounds are provided, use a deterministic default span from `2000-01-01` through `eval_reference_date` when provided, otherwise through the current date in the configured runtime timezone. Authoritative replay scoring must either pass explicit `karar_tarihi_start` and `karar_tarihi_end` or pass `eval_reference_date`; it must not depend on wall-clock current date. Split the span into `max_window_searches` contiguous equal-duration windows ordered newest-to-oldest. If explicit `karar_tarihi_start` and `karar_tarihi_end` are provided, split that closed interval by the same rule. Equal-count partitioning is out of scope because Bedesten exposes counts only after search calls. Window IDs are stable strings `w0`, `w1`, ... in newest-to-oldest order.
 
 ## Data Flow
 1. Validate `base_query`, court types, budgets, and `page_size`; clamp `page_size` to 100.
-2. Search the base query once with `pageSize=100`, `pageNumber=1`, and selected court types.
+2. Convert plain base-query terms to required terms, then search that canonical base query once with `pageSize=100`, `pageNumber=1`, and selected court types.
 3. Assemble probe phrases with explicit required-term semantics, never by plain string concatenation. Atomic discriminator terms are added with the Bedesten `+term` required operator. Multi-word candidates are split into atomic required terms by default.
-4. Probe discriminators greedily, respecting the global `max_probe_searches` budget.
+4. Probe discriminators greedily, respecting the global `max_probe_searches` budget. Default and hard cap are conservative (`4`) to avoid a single count-guided call exhausting the shared Bedesten bucket.
 5. Select a high-recall candidate pool, not the tightest possible total. Reject probes with `total < min_total_floor`, and stop adding discriminators once the policy-specific stop condition is met.
 6. Run final search for the selected query with `pageSize=100`. If `total` exceeds `page_size`, fetch additional pages before opening any date-window fallback.
 7. If final results remain incomplete after configured pages, return a loud incomplete/truncated diagnostic. If `max_window_searches > 0`, use date-window fallback to give older decisions dedicated coverage before marking the pool incomplete.
