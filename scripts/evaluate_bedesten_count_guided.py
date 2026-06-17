@@ -4,6 +4,7 @@ import json
 from typing import Any, Dict, Iterable, List, Set
 
 from bedesten_mcp_module.count_guided import (
+    DEFAULT_MAX_PROBE_SEARCHES,
     POLICY_LOOSE_PAGES,
     run_bedesten_count_guided_retrieval,
 )
@@ -225,7 +226,7 @@ async def evaluate_recorded_cases(
             policy=case.get("policy", POLICY_LOOSE_PAGES),
             min_total_floor=case.get("min_total_floor", 1),
             page_size=case.get("page_size", 100),
-            max_probe_searches=case.get("max_probe_searches", 12),
+            max_probe_searches=case.get("max_probe_searches", DEFAULT_MAX_PROBE_SEARCHES),
             max_pages_per_final_query=case.get("max_pages_per_final_query", 2),
             max_window_searches=case.get("max_window_searches", 0),
             max_fulltext_fetches=0,
