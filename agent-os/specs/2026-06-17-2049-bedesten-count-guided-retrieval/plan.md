@@ -6,7 +6,7 @@
 - [ ] Budget defaults other than Bedesten `pageSize=100` are treated as experimental until derived from measurement on real or equivalent live-corpus scenarios.
 - [ ] The final selected query uses `pageSize=100` unless a lower value is explicitly configured, and never exceeds Bedesten's supported maximum of 100.
 - [ ] Phrase assembly is explicit: plain base-query terms and discriminators are emitted as atomic required `+term` tokens by default, not plain concatenation or exact-phrase matching.
-- [ ] The selection loop uses a small global probe budget and greedy single-discriminator steps; it does not run beam search, unconstrained combinations, or caller-requested probe bursts above the server cap.
+- [ ] The selection loop uses a small global probe budget and one cumulative greedy stack path; it does not run beam search, unconstrained combinations, or caller-requested probe bursts above the server cap.
 - [ ] The loop rejects `total == 0` probes and avoids selecting the tightest total blindly; it optimizes for measured recall, not merely `total <= page_size`.
 - [ ] If the selected query has `total > page_size`, the tool fetches additional pages before using date-window fallback.
 - [ ] If configured pages and windows do not cover the selected total, the response marks the candidate pool as incomplete/truncated loudly.
@@ -15,7 +15,7 @@
 - [ ] Response diagnostics follow `bedesten_count_guided.v1`; `candidate_document_ids` is the only recall-scored candidate pool field, while `fetched_documents` is only the bounded full-text subset.
 - [ ] Narrowing policies are exactly `tight_page`, `loose_pages`, and `windowed_loose_pages`; task implementations, eval protocol, and reports use these identifiers without renaming.
 - [ ] `policy`, `min_total_floor`, and `eval_reference_date` are explicit helper inputs so tests and eval can drive every policy/floor/window replay combination deterministically.
-- [ ] Greedy selection uses the documented largest-total-in-band tie-break and returns the base-query pool with truncation diagnostics if no stack reaches the stop band within budget.
+- [ ] Greedy selection avoids accepting rare single-discriminator fits when higher-coverage reducers can be stacked, and returns the base-query pool with truncation diagnostics if no stack reaches the stop band within budget.
 - [ ] Real-corpus or equivalent live-corpus eval verifies target recall by `documentId`; tests do not assert exact query-string equality as the success condition.
 - [ ] The eval protocol is pre-registered before scoring and pins ground-truth provenance, baselines, case count, target count, recall metric, pass threshold, and invalid-run conditions.
 - [ ] Production exposure requires at least 7 independent real-corpus questions, at least 10 total target document IDs, no per-case recall regression versus current first-page `search_bedesten`, macro recall improvement of at least 15 percentage points versus request-budget-matched lexical pagination, and at least two additional target documents recalled overall.

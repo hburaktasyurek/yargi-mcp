@@ -289,6 +289,107 @@ class ManyProbeFakeClient:
         raise AssertionError("documents should not be fetched")
 
 
+class StackingRecallFakeClient:
+    def __init__(self):
+        self.search_requests = []
+
+    async def search_documents(self, search_request):
+        self.search_requests.append(search_request)
+        phrase = search_request.data.phrase
+        totals_by_phrase = {
+            "+ucus +tazminat": 1000,
+            "+ucus +tazminat +feragat": 50,
+            "+ucus +tazminat +iptal": 645,
+            "+ucus +tazminat +zarar": 300,
+            "+ucus +tazminat +sorumluluk": 260,
+            "+ucus +tazminat +iptal +zarar": 50,
+        }
+        documents_by_phrase = {
+            "+ucus +tazminat +feragat": ["off-point"],
+            "+ucus +tazminat +iptal +zarar": ["target-1", "target-2", "target-3"],
+        }
+        return BedestenSearchResponse(
+            data=BedestenSearchDataResponse(
+                emsalKararList=[
+                    decision(document_id)
+                    for document_id in documents_by_phrase.get(phrase, [f"{phrase}-doc"])
+                ],
+                total=totals_by_phrase[phrase],
+                start=0,
+            ),
+            metadata={},
+        )
+
+    async def get_document_as_markdown(self, document_id: str):
+        raise AssertionError("documents should not be fetched")
+
+
+class StackingBudgetReservationFakeClient:
+    def __init__(self):
+        self.search_requests = []
+
+    async def search_documents(self, search_request):
+        self.search_requests.append(search_request)
+        phrase = search_request.data.phrase
+        totals_by_phrase = {
+            "+ucus +tazminat": 1000,
+            "+ucus +tazminat +feragat": 50,
+            "+ucus +tazminat +iptal": 645,
+            "+ucus +tazminat +zarar": 300,
+            "+ucus +tazminat +sorumluluk": 260,
+            "+ucus +tazminat +yolcu": 240,
+            "+ucus +tazminat +bagaj": 230,
+            "+ucus +tazminat +gecikme": 220,
+            "+ucus +tazminat +iptal +zarar": 50,
+        }
+        documents_by_phrase = {
+            "+ucus +tazminat +feragat": ["off-point"],
+            "+ucus +tazminat +iptal +zarar": ["target-1", "target-2", "target-3"],
+        }
+        return BedestenSearchResponse(
+            data=BedestenSearchDataResponse(
+                emsalKararList=[
+                    decision(document_id)
+                    for document_id in documents_by_phrase.get(phrase, [f"{phrase}-doc"])
+                ],
+                total=totals_by_phrase[phrase],
+                start=0,
+            ),
+            metadata={},
+        )
+
+    async def get_document_as_markdown(self, document_id: str):
+        raise AssertionError("documents should not be fetched")
+
+
+class NoStackStopBandFakeClient:
+    def __init__(self):
+        self.search_requests = []
+
+    async def search_documents(self, search_request):
+        self.search_requests.append(search_request)
+        phrase = search_request.data.phrase
+        total = {
+            "+genis +uyusmazlik": 1000,
+            "+genis +uyusmazlik +bir": 700,
+            "+genis +uyusmazlik +iki": 650,
+            "+genis +uyusmazlik +uc": 600,
+            "+genis +uyusmazlik +bir +iki": 500,
+            "+genis +uyusmazlik +bir +uc": 450,
+        }.get(phrase, 400)
+        return BedestenSearchResponse(
+            data=BedestenSearchDataResponse(
+                emsalKararList=[decision("broad-doc")],
+                total=total,
+                start=0,
+            ),
+            metadata={},
+        )
+
+    async def get_document_as_markdown(self, document_id: str):
+        raise AssertionError("documents should not be fetched")
+
+
 class BedestenCountGuidedTests(unittest.IsolatedAsyncioTestCase):
     async def test_plain_base_query_terms_are_required_for_count_probes(self):
         client = RequiredBaseIntersectionFakeClient()
@@ -328,8 +429,84 @@ class BedestenCountGuidedTests(unittest.IsolatedAsyncioTestCase):
             max_fulltext_fetches=0,
         )
 
-        self.assertLessEqual(len(response["diagnostics"]["probes"]), 4)
-        self.assertEqual(response["diagnostics"]["budget"]["max_probe_searches"], 4)
+        self.assertLessEqual(len(response["diagnostics"]["probes"]), 7)
+        self.assertEqual(response["diagnostics"]["budget"]["max_probe_searches"], 7)
+
+    async def test_stacks_high_coverage_reducers_before_accepting_rare_single_fit(self):
+        client = StackingRecallFakeClient()
+
+        response = await run_bedesten_count_guided_retrieval(
+            bedesten_client=client,
+            base_query="ucus tazminat",
+            discriminator_candidates=["feragat", "iptal", "zarar", "sorumluluk"],
+            court_types=["YARGITAYKARARI"],
+            policy=POLICY_TIGHT_PAGE,
+            min_total_floor=10,
+            page_size=100,
+            max_probe_searches=7,
+            max_pages_per_final_query=1,
+            max_fulltext_fetches=0,
+        )
+
+        self.assertEqual(response["status"], "success")
+        self.assertEqual(
+            {"target-1", "target-2", "target-3"} <= set(response["candidate_document_ids"]),
+            True,
+        )
+        self.assertEqual(response["diagnostics"]["selected_discriminators"], ["iptal", "zarar"])
+        self.assertLessEqual(len(response["diagnostics"]["probes"]), 7)
+
+    async def test_reserves_probe_budget_for_stacking_when_many_single_candidates_exist(self):
+        client = StackingBudgetReservationFakeClient()
+
+        response = await run_bedesten_count_guided_retrieval(
+            bedesten_client=client,
+            base_query="ucus tazminat",
+            discriminator_candidates=[
+                "feragat",
+                "iptal",
+                "zarar",
+                "sorumluluk",
+                "yolcu",
+                "bagaj",
+                "gecikme",
+            ],
+            court_types=["YARGITAYKARARI"],
+            policy=POLICY_TIGHT_PAGE,
+            min_total_floor=10,
+            page_size=100,
+            max_probe_searches=7,
+            max_pages_per_final_query=1,
+            max_fulltext_fetches=0,
+        )
+
+        self.assertEqual(response["status"], "success")
+        self.assertEqual(response["diagnostics"]["selected_discriminators"], ["iptal", "zarar"])
+        self.assertEqual(
+            {"target-1", "target-2", "target-3"} <= set(response["candidate_document_ids"]),
+            True,
+        )
+        self.assertLessEqual(len(response["diagnostics"]["probes"]), 7)
+
+    async def test_unfinished_stack_reports_stop_band_not_reached(self):
+        client = NoStackStopBandFakeClient()
+
+        response = await run_bedesten_count_guided_retrieval(
+            bedesten_client=client,
+            base_query="genis uyusmazlik",
+            discriminator_candidates=["bir", "iki", "uc"],
+            court_types=["YARGITAYKARARI"],
+            policy=POLICY_TIGHT_PAGE,
+            min_total_floor=10,
+            page_size=100,
+            max_probe_searches=5,
+            max_pages_per_final_query=1,
+            max_fulltext_fetches=0,
+        )
+
+        self.assertEqual(response["status"], "partial")
+        self.assertIn("no_stack_reached_stop_band", response["diagnostics"]["errors"])
+        self.assertNotIn("no_reducing_candidate", response["diagnostics"]["errors"])
 
     async def test_explicit_large_probe_budget_is_clamped_to_bedesten_safe_cap(self):
         client = ManyProbeFakeClient()
@@ -346,8 +523,8 @@ class BedestenCountGuidedTests(unittest.IsolatedAsyncioTestCase):
             max_fulltext_fetches=0,
         )
 
-        self.assertLessEqual(len(response["diagnostics"]["probes"]), 4)
-        self.assertEqual(response["diagnostics"]["budget"]["max_probe_searches"], 4)
+        self.assertLessEqual(len(response["diagnostics"]["probes"]), 7)
+        self.assertEqual(response["diagnostics"]["budget"]["max_probe_searches"], 7)
 
     async def test_loose_policy_uses_v1_schema_and_required_term_candidate_pool(self):
         client = CountGuidedFakeClient()
