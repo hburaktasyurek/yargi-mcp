@@ -1303,6 +1303,59 @@ async def get_bedesten_document_markdown(
         logger.exception("Error in tool 'get_bedesten_document_markdown'")
         raise
 
+if os.getenv("BEDESTEN_COUNT_GUIDED_EXPERIMENTAL", "").strip() == "1":
+    from bedesten_mcp_module.count_guided import (
+        POLICY_LOOSE_PAGES,
+        run_bedesten_count_guided_retrieval,
+    )
+
+    @app.tool(
+        description=(
+            "Experimental Bedesten count-guided retrieval spike. Uses Bedesten total counts, "
+            "explicit policy controls, bounded pagination/windowing, and returns candidate_document_ids. "
+            "Enabled only with BEDESTEN_COUNT_GUIDED_EXPERIMENTAL=1."
+        ),
+        annotations={
+            "readOnlyHint": True,
+            "openWorldHint": True,
+            "idempotentHint": True,
+        }
+    )
+    async def search_bedesten_count_guided(
+        ctx: Context,
+        base_query: str = Field(..., description="Base lexical Bedesten query in Turkish."),
+        discriminator_candidates: List[str] = Field(default=[], description="Candidate discriminator terms supplied by the caller."),
+        court_types: List[BedestenCourtTypeEnum] = Field(default=["YARGITAYKARARI"], description="Bedesten court types to search."),
+        policy: str = Field(POLICY_LOOSE_PAGES, description="tight_page, loose_pages, or windowed_loose_pages."),
+        min_total_floor: int = Field(1, ge=1, description="Minimum acceptable total for a discriminator probe."),
+        page_size: int = Field(100, ge=1, le=100, description="Bedesten page size, clamped to 1-100."),
+        max_probe_searches: int = Field(12, ge=0, description="Global probe search budget."),
+        max_pages_per_final_query: int = Field(2, ge=1, description="Final query pages to fetch before windowing."),
+        max_window_searches: int = Field(0, ge=0, description="Date-window fallback search budget."),
+        max_fulltext_fetches: int = Field(10, ge=0, description="Bounded full-text fetch count after candidate selection."),
+        kararTarihiStart: str = Field("", description="Optional start date, YYYY-MM-DD or ISO 8601."),
+        kararTarihiEnd: str = Field("", description="Optional end date, YYYY-MM-DD or ISO 8601."),
+        eval_reference_date: str = Field("", description="Fixed YYYY-MM-DD date for replay-deterministic windows."),
+        birimAdi: BirimAdiEnum = Field("ALL", description="Optional Bedesten chamber filter."),
+    ) -> dict:
+        return await run_bedesten_count_guided_retrieval(
+            bedesten_client=bedesten_client_instance,
+            base_query=base_query,
+            discriminator_candidates=discriminator_candidates,
+            court_types=court_types,
+            policy=policy,
+            min_total_floor=min_total_floor,
+            page_size=page_size,
+            max_probe_searches=max_probe_searches,
+            max_pages_per_final_query=max_pages_per_final_query,
+            max_window_searches=max_window_searches,
+            max_fulltext_fetches=max_fulltext_fetches,
+            karar_tarihi_start=kararTarihiStart,
+            karar_tarihi_end=kararTarihiEnd,
+            eval_reference_date=eval_reference_date,
+            birim_adi=birimAdi,
+        )
+
 
 # --- Semantic Search Tool (Conditional - requires an embedding provider) ---
 if SEMANTIC_SEARCH_AVAILABLE:
