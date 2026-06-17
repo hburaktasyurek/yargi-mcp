@@ -23,7 +23,7 @@ async def search_bedesten_count_guided(
     policy: str = "loose_pages",
     min_total_floor: int = 1,
     page_size: int = 100,
-    max_probe_searches: int = 4,
+    max_probe_searches: int = 7,
     max_pages_per_final_query: int = 2,
     max_window_searches: int = 0,
     max_fulltext_fetches: int = 10,
@@ -47,7 +47,7 @@ async def run_bedesten_count_guided_retrieval(
     policy: str = "loose_pages",
     min_total_floor: int = 1,
     page_size: int = 100,
-    max_probe_searches: int = 4,
+    max_probe_searches: int = 7,
     max_pages_per_final_query: int = 2,
     max_window_searches: int = 0,
     max_fulltext_fetches: int = 10,
@@ -161,19 +161,20 @@ All spike helpers, eval harnesses, tests, and any mutalaa consumer must use this
 ## Narrowing Policies
 The spike must implement and report this fixed policy identifier set. Eval protocol and harnesses must use these exact IDs.
 
-- `tight_page`: greedily add required discriminators until `min_total_floor <= total <= page_size`; reject probes with `total < min_total_floor` or `total == 0`; stop after the first stack that fits one page.
-- `loose_pages`: greedily add required discriminators until `min_total_floor <= total <= page_size * max_pages_per_final_query`; reject probes with `total < min_total_floor` or `total == 0`; fetch configured pages before declaring incompleteness.
+- `tight_page`: probe single discriminators, prefer high-coverage reducers above `page_size` over rare single terms that already fit, then follow one cumulative greedy stack path until `min_total_floor <= total <= page_size`; reject probes with `total < min_total_floor` or `total == 0`.
+- `loose_pages`: same single-probe ordering and one-path cumulative stacking, but the stop limit is `page_size * max_pages_per_final_query`; fetch configured pages before declaring incompleteness.
 - `windowed_loose_pages`: same discriminator selection as `loose_pages`, then apply date-window fallback only if selected `total` still exceeds covered pages and `max_window_searches > 0`.
 
 `min_total_floor` is a swept eval parameter, not a hidden heuristic. The pre-registered protocol must score at least `min_total_floor=1` and `min_total_floor=max(5, ceil(page_size * 0.05))`; production defaults come from the winning recorded eval run.
 
-Greedy selection is deterministic:
-1. At each step, probe remaining candidates appended to the current selected stack until the global probe budget is exhausted.
+Greedy selection is deterministic and bounded:
+1. Probe single-discriminator candidates first, up to the global probe budget.
 2. Reject probes with `total is None`, `total == 0`, or `total < min_total_floor`.
-3. If one or more probes satisfy the active policy stop band, choose the candidate with the largest `total` inside the band; tie-break by original discriminator order.
-4. If no probe satisfies the stop band, choose the candidate with the largest nonzero reduction that still has `total >= min_total_floor`; tie-break by larger `total`, then original discriminator order.
-5. If no valid reducing candidate exists, stop and return the current stack.
-6. If the stop band is never reached before `max_probe_searches`, return the recall-safer base-query pool instead of a narrowed-but-still-too-large stack. Mark `diagnostics.budget.exhausted=true` only when the probe budget was actually consumed; otherwise record `no_reducing_candidate` in `diagnostics.errors`. Set `diagnostics.truncation.is_truncated=true` only if the returned base-query pool also exceeds the configured page/window coverage.
+3. If any single reducer remains above the active stop limit, choose the largest-total above-band reducer first, even if another rare single discriminator already fits the band.
+4. Continue on one cumulative greedy stack path by trying remaining single reducers in largest-total order. Accept a stacked discriminator only when it reduces the current stack and remains `>= min_total_floor`.
+5. Stop successfully when the cumulative stack reaches the active stop band. If no above-band single reducer exists, fall back to the largest-total in-band single discriminator.
+6. If no valid reducing candidate exists, stop and return the base-query pool.
+7. If the stop band is never reached before `max_probe_searches`, return the recall-safer base-query pool instead of a narrowed-but-still-too-large or rare single stack. Mark `diagnostics.budget.exhausted=true` only when the probe budget was actually consumed; otherwise record `no_reducing_candidate` in `diagnostics.errors`. Set `diagnostics.truncation.is_truncated=true` only if the returned base-query pool also exceeds the configured page/window coverage.
 
 ## Phrase Assembly
 Plain base-query terms and atomic discriminator terms are emitted as required terms: `+term`, so count probes measure the base-query intersection plus the candidate discriminator rather than discriminator-wide corpus frequency. Multi-word discriminator candidates are split into atomic required terms by default, preserving only non-empty whitespace-delimited tokens. If a caller supplies an already-operator-bearing base query (`+`, `-`, boolean operator, or quoted phrase), preserve it instead of blindly rewriting it. Required exact phrase mode is not a default branch; it may be added only as a separately named eval dimension after a syntax-only validation that the quoted phrase is accepted by Bedesten without 400/validation failure. The spike must not mix exact-phrase and atomic-split results under the same policy ID.
@@ -185,7 +186,7 @@ If `max_window_searches > 0` and no date bounds are provided, use a deterministi
 1. Validate `base_query`, court types, budgets, and `page_size`; clamp `page_size` to 100.
 2. Convert plain base-query terms to required terms, then search that canonical base query once with `pageSize=100`, `pageNumber=1`, and selected court types.
 3. Assemble probe phrases with explicit required-term semantics, never by plain string concatenation. Atomic discriminator terms are added with the Bedesten `+term` required operator. Multi-word candidates are split into atomic required terms by default.
-4. Probe discriminators greedily, respecting the global `max_probe_searches` budget. Default and hard cap are conservative (`4`) to avoid a single count-guided call exhausting the shared Bedesten bucket.
+4. Probe discriminators greedily, respecting the global `max_probe_searches` budget. Default and hard cap are conservative (`7`): roughly single probes plus up to three cumulative stack probes, keeping a normal run near one Bedesten rate window instead of an unbounded burst.
 5. Select a high-recall candidate pool, not the tightest possible total. Reject probes with `total < min_total_floor`, and stop adding discriminators once the policy-specific stop condition is met.
 6. Run final search for the selected query with `pageSize=100`. If `total` exceeds `page_size`, fetch additional pages before opening any date-window fallback.
 7. If final results remain incomplete after configured pages, return a loud incomplete/truncated diagnostic. If `max_window_searches > 0`, use date-window fallback to give older decisions dedicated coverage before marking the pool incomplete.

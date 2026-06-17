@@ -1306,7 +1306,6 @@ async def get_bedesten_document_markdown(
 if os.getenv("BEDESTEN_COUNT_GUIDED_EXPERIMENTAL", "").strip() == "1":
     from bedesten_mcp_module.count_guided import (
         DEFAULT_MAX_PROBE_SEARCHES,
-        MAX_PROBE_SEARCHES_HARD_CAP,
         POLICY_LOOSE_PAGES,
         run_bedesten_count_guided_retrieval,
     )
@@ -1331,7 +1330,7 @@ if os.getenv("BEDESTEN_COUNT_GUIDED_EXPERIMENTAL", "").strip() == "1":
         policy: str = Field(POLICY_LOOSE_PAGES, description="tight_page, loose_pages, or windowed_loose_pages."),
         min_total_floor: int = Field(1, ge=1, description="Minimum acceptable total for a discriminator probe."),
         page_size: int = Field(100, ge=1, le=100, description="Bedesten page size, clamped to 1-100."),
-        max_probe_searches: int = Field(DEFAULT_MAX_PROBE_SEARCHES, ge=0, le=MAX_PROBE_SEARCHES_HARD_CAP, description="Global probe search budget. Server clamps this to the conservative Bedesten-safe cap."),
+        max_probe_searches: int = Field(DEFAULT_MAX_PROBE_SEARCHES, ge=0, description="Global probe search budget. Server clamps this to the conservative Bedesten-safe cap."),
         max_pages_per_final_query: int = Field(2, ge=1, description="Final query pages to fetch before windowing."),
         max_window_searches: int = Field(0, ge=0, description="Date-window fallback search budget."),
         max_fulltext_fetches: int = Field(10, ge=0, description="Bounded full-text fetch count after candidate selection."),

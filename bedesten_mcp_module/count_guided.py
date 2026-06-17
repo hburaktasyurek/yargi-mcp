@@ -28,8 +28,9 @@ POLICY_TIGHT_PAGE = "tight_page"
 POLICY_LOOSE_PAGES = "loose_pages"
 POLICY_WINDOWED_LOOSE_PAGES = "windowed_loose_pages"
 POLICIES = {POLICY_TIGHT_PAGE, POLICY_LOOSE_PAGES, POLICY_WINDOWED_LOOSE_PAGES}
-DEFAULT_MAX_PROBE_SEARCHES = 4
-MAX_PROBE_SEARCHES_HARD_CAP = 4
+DEFAULT_MAX_PROBE_SEARCHES = 7
+MAX_PROBE_SEARCHES_HARD_CAP = 7
+STACK_PROBE_RESERVE = 3
 
 ALLOWED_COURT_TYPES = {
     "YARGITAYKARARI",
@@ -347,82 +348,132 @@ async def _probe_policy(
     stop_limit = _policy_limit(policy, page_size, max_pages_per_final_query)
     stop_reached = False
     selected_total: Optional[int] = None
+    saw_reducer = False
+    attempted_stack = False
 
-    while remaining and diagnostics["budget"]["searches_used"] < max_probe_searches + 1:
-        probe_results = []
-        for index, candidate in enumerate(remaining):
-            if diagnostics["budget"]["searches_used"] >= max_probe_searches + 1:
-                break
-            phrase = _append_discriminators(base_query, selected + [candidate])
-            search_response = await _search(
-                bedesten_client,
-                phrase=phrase,
-                court_types=court_types,
-                page_size=page_size,
-                page_number=1,
-                birim_adi=birim_adi,
-                karar_tarihi_start=karar_tarihi_start,
-                karar_tarihi_end=karar_tarihi_end,
+    async def run_probe(
+        *,
+        index: int,
+        candidate: str,
+        stack: List[str],
+    ) -> Optional[Tuple[int, str, str, int]]:
+        phrase = _append_discriminators(base_query, stack + [candidate])
+        search_response = await _search(
+            bedesten_client,
+            phrase=phrase,
+            court_types=court_types,
+            page_size=page_size,
+            page_number=1,
+            birim_adi=birim_adi,
+            karar_tarihi_start=karar_tarihi_start,
+            karar_tarihi_end=karar_tarihi_end,
+        )
+        diagnostics["budget"]["searches_used"] += 1
+        total = _response_total(search_response)
+        rejected_reason = None
+        status = "valid"
+        if total == 0:
+            status = "rejected"
+            rejected_reason = "zero_total"
+        elif total < min_total_floor:
+            status = "rejected"
+            rejected_reason = "below_min_total_floor"
+        discriminators = stack + [candidate]
+        diagnostics["probes"].append(
+            {
+                "policy_id": policy,
+                "phrase": phrase,
+                "discriminators": discriminators,
+                "total_records": total,
+                "page_size": page_size,
+                "status": status,
+                "rejected_reason": rejected_reason,
+            }
+        )
+        if rejected_reason:
+            diagnostics["rejected_discriminators"].append(
+                {"candidate": candidate, "reason": rejected_reason}
             )
-            diagnostics["budget"]["searches_used"] += 1
-            total = _response_total(search_response)
-            rejected_reason = None
-            status = "valid"
-            if total == 0:
-                status = "rejected"
-                rejected_reason = "zero_total"
-            elif total < min_total_floor:
-                status = "rejected"
-                rejected_reason = "below_min_total_floor"
-            diagnostics["probes"].append(
-                {
-                    "policy_id": policy,
-                    "phrase": phrase,
-                    "discriminators": selected + [candidate],
-                    "total_records": total,
-                    "page_size": page_size,
-                    "status": status,
-                    "rejected_reason": rejected_reason,
-                }
-            )
-            if rejected_reason:
-                diagnostics["rejected_discriminators"].append(
-                    {"candidate": candidate, "reason": rejected_reason}
-                )
-                continue
-            probe_results.append((index, candidate, phrase, total))
+            return None
+        return index, candidate, phrase, total
 
-        in_band = [
-            result for result in probe_results
-            if min_total_floor <= result[3] <= stop_limit
+    single_results = []
+    single_probe_cap = min(len(remaining), max_probe_searches)
+    if len(remaining) >= max_probe_searches:
+        single_probe_cap = max(1, max_probe_searches - STACK_PROBE_RESERVE)
+    for index, candidate in enumerate(remaining):
+        if (
+            len(diagnostics["probes"]) >= single_probe_cap
+            or diagnostics["budget"]["searches_used"] >= max_probe_searches + 1
+        ):
+            break
+        result = await run_probe(index=index, candidate=candidate, stack=[])
+        if result:
+            single_results.append(result)
+
+    reducers = [
+        result for result in single_results
+        if min_total_floor <= result[3] < current_total
+    ]
+    if reducers:
+        saw_reducer = True
+        above_band = [
+            result for result in reducers
+            if result[3] > stop_limit
         ]
-        if in_band:
+        if above_band:
             index, candidate, phrase, total = sorted(
-                in_band,
+                above_band,
                 key=lambda item: (-item[3], item[0]),
             )[0]
             selected.append(candidate)
             selected_total = total
-            stop_reached = True
-            return phrase, selected, selected_total, stop_reached
+            current_total = total
 
-        reducers = [
-            result for result in probe_results
-            if min_total_floor <= result[3] < current_total
-        ]
-        if not reducers:
-            break
-        index, candidate, phrase, total = sorted(
-            reducers,
-            key=lambda item: (-item[3], item[0]),
-        )[0]
-        selected.append(candidate)
-        selected_total = total
-        current_total = total
-        remaining.pop(index)
+            for next_index, next_candidate, _single_phrase, _single_total in sorted(
+                [result for result in reducers if result[1] not in selected],
+                key=lambda item: (-item[3], item[0]),
+            ):
+                if diagnostics["budget"]["searches_used"] >= max_probe_searches + 1:
+                    break
+                attempted_stack = True
+                stack_result = await run_probe(
+                    index=next_index,
+                    candidate=next_candidate,
+                    stack=selected,
+                )
+                if not stack_result:
+                    continue
+                _index, stack_candidate, stack_phrase, stack_total = stack_result
+                if stack_total >= current_total:
+                    continue
+                selected.append(stack_candidate)
+                selected_total = stack_total
+                current_total = stack_total
+                if stack_total <= stop_limit:
+                    stop_reached = True
+                    return stack_phrase, selected, selected_total, stop_reached
+        else:
+            in_band = [
+                result for result in reducers
+                if result[3] <= stop_limit
+            ]
+            if in_band:
+                index, candidate, phrase, total = sorted(
+                    in_band,
+                    key=lambda item: (-item[3], item[0]),
+                )[0]
+                selected.append(candidate)
+                selected_total = total
+                stop_reached = True
+                return phrase, selected, selected_total, stop_reached
 
     if diagnostics["budget"]["searches_used"] >= max_probe_searches + 1:
         diagnostics["budget"]["exhausted"] = True
+        if saw_reducer or attempted_stack:
+            diagnostics["errors"].append("no_stack_reached_stop_band")
+    elif saw_reducer or attempted_stack:
+        diagnostics["errors"].append("no_stack_reached_stop_band")
     else:
         diagnostics["errors"].append("no_reducing_candidate")
     return base_query, [], selected_total, stop_reached
