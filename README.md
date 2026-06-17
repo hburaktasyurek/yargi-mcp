@@ -322,6 +322,18 @@ API anahtarınızı [openrouter.ai/keys](https://openrouter.ai/keys) adresinden 
 - Bedesten rate limitlerini korumak için full-text fetch işlemlerini sıralı yapar; varsayılan olarak 8, en fazla 25 belge çeker.
 - Tam metinleri chunk'lara böler, chunk embedding'leri üzerinden karar bazlı skor üretir.
 
+### Count-Guided Bedesten Retrieval Spike
+
+`search_bedesten_count_guided` deneysel bir Bedesten retrieval aracıdır ve varsayılan olarak kapalıdır. Embedding kullanmaz; Bedesten `total` sayılarını kullanarak discriminator adaylarını ölçer, `candidate_document_ids` havuzunu üretir ve full-text fetch'i küçük bir alt kümeyle sınırlar.
+
+Etkinleştirmek için:
+
+```bash
+BEDESTEN_COUNT_GUIDED_EXPERIMENTAL=1
+```
+
+Bu araç production retrieval primitive değildir. Production exposure için `agent-os/specs/2026-06-17-2049-bedesten-count-guided-retrieval/eval-protocol.md` içindeki recorded/replayed eval gate'in geçmesi gerekir.
+
 Opsiyonel dış sözlük formatı:
 
 ```json
