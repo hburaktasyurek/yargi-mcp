@@ -21,6 +21,7 @@ import json
 import os
 import time
 from collections import defaultdict
+from importlib.metadata import PackageNotFoundError, version as package_version
 from pydantic import HttpUrl, Field
 from starlette.responses import JSONResponse
 from typing import Optional, Dict, List, Literal, Any
@@ -52,6 +53,13 @@ root_logger.addHandler(console_handler)
 
 logger = logging.getLogger(__name__)
 # --- Logging Configuration End ---
+
+
+def get_service_version() -> str:
+    try:
+        return package_version("yargi-mcp")
+    except PackageNotFoundError:
+        return "0.2.0"
 
 # --- Token Counting Middleware ---
 class TokenCountingMiddleware(Middleware):
@@ -348,7 +356,7 @@ from sigorta_tahkim_mcp_module.models import (
 # MCP app for Turkish legal databases with explicit capabilities
 app = FastMCP(
     name="Yargı MCP Server",
-    version="0.1.6"
+    version=get_service_version()
 )
 
 
@@ -356,7 +364,7 @@ def _health_payload() -> Dict[str, Any]:
     return {
         "status": "healthy",
         "service": "Yargı MCP Server",
-        "version": "0.1.6",
+        "version": get_service_version(),
     }
 
 
@@ -1488,6 +1496,7 @@ if SEMANTIC_SEARCH_AVAILABLE:
         return max(0.0, deadline - time.monotonic())
 
     def _semantic_year_to_iso(year_value: Any, *, end: bool = False) -> str:
+        # FastMCP's direct .fn test path can pass FieldInfo defaults instead of resolved values.
         if hasattr(year_value, "default"):
             year_value = year_value.default
         if year_value in (None, ""):
