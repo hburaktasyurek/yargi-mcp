@@ -33,6 +33,7 @@ PROMPT_STYLES = ("gemini", "e5", "raw")
 DEFAULT_PROMPT_STYLE = "gemini"
 DEFAULT_EMBEDDING_TIMEOUT_S = 20.0
 DEFAULT_EMBEDDING_MAX_RETRIES = 1
+DEFAULT_EMBEDDING_BATCH_SIZE = 32
 
 
 def _coerce_float_env(env_name: str, default: float, min_value: float, max_value: float) -> float:
@@ -77,6 +78,10 @@ def get_embedding_request_timeout_s() -> float:
 
 def get_embedding_max_retries() -> int:
     return _coerce_int_env("EMBEDDING_MAX_RETRIES", DEFAULT_EMBEDDING_MAX_RETRIES, 0, 3)
+
+
+def get_embedding_batch_size() -> int:
+    return _coerce_int_env("EMBEDDING_BATCH_SIZE", DEFAULT_EMBEDDING_BATCH_SIZE, 1, 128)
 
 
 def _format_query(prompt_style: str, query: str, task: str) -> str:
@@ -151,6 +156,7 @@ class _BaseOpenAICompatibleEmbedder:
     model: str = ""
     dimension: int = 0
     prompt_style: str = DEFAULT_PROMPT_STYLE
+    provider: str = ""
 
     def encode_query(self, query: str, task: str = "search result") -> np.ndarray:
         """
@@ -208,17 +214,21 @@ class _BaseOpenAICompatibleEmbedder:
             texts.append(_format_document(self.prompt_style, doc, title))
 
         try:
-            response = self.client.embeddings.create(
-                model=self.model,
-                input=texts,
-                encoding_format="float",
-                extra_headers=self._extra_headers or None,
-            )
+            embeddings_by_batch = []
+            batch_size = get_embedding_batch_size()
+            for start in range(0, len(texts), batch_size):
+                batch = texts[start:start + batch_size]
+                response = self.client.embeddings.create(
+                    model=self.model,
+                    input=batch,
+                    encoding_format="float",
+                    extra_headers=self._extra_headers or None,
+                )
+                embeddings_by_batch.extend(
+                    d.embedding for d in sorted(response.data, key=lambda x: x.index)
+                )
 
-            embeddings = np.array(
-                [d.embedding for d in sorted(response.data, key=lambda x: x.index)],
-                dtype=np.float32,
-            )
+            embeddings = np.array(embeddings_by_batch, dtype=np.float32)
 
             # L2 normalize each embedding for cosine similarity
             norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
@@ -294,6 +304,7 @@ class OpenRouterEmbedder(_BaseOpenAICompatibleEmbedder):
             max_retries=get_embedding_max_retries(),
         )
         self.model = model or os.getenv("OPENROUTER_EMBEDDING_MODEL") or DEFAULT_MODEL
+        self.provider = "openrouter"
         self.dimension = _coerce_dimension(
             dimension if dimension is not None else os.getenv("OPENROUTER_EMBEDDING_DIMENSION"),
             "OPENROUTER_EMBEDDING_DIMENSION",
@@ -364,6 +375,7 @@ class LocalEmbedder(_BaseOpenAICompatibleEmbedder):
             max_retries=get_embedding_max_retries(),
         )
         self.model = model or os.getenv("LOCAL_EMBEDDING_MODEL") or LOCAL_DEFAULT_MODEL
+        self.provider = "local"
         self.dimension = _coerce_dimension(
             dimension if dimension is not None else os.getenv("LOCAL_EMBEDDING_DIMENSION"),
             "LOCAL_EMBEDDING_DIMENSION",

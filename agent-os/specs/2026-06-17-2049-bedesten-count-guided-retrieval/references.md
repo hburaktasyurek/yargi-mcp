@@ -11,7 +11,7 @@
   - `BedestenSearchData.pageNumber` is 1-indexed (line 22).
   - `BedestenSearchData.phrase` supports word, exact phrase, required/exclude, and boolean operators, with no wildcards or regex (line 24).
   - `BedestenSearchData` includes chamber and date filters through `birimAdi`, `kararTarihiStart`, and `kararTarihiEnd` (lines 25-31).
-  - `BedestenSearchData` defaults sort fields to `KARAR_TARIHI` and direction to `desc` (lines 32-33).
+  - `BedestenSearchData` leaves sorting empty by default; callers must set `sortFields` and `sortDirection` explicitly when a specific order is required.
   - `BedestenDecisionEntry` metadata contains IDs, court type, chamber, case/decision numbers, decision type, date, finalization status, and no snippet/body text (lines 45-59).
   - `BedestenSearchDataResponse` includes `emsalKararList`, `total`, and `start` (lines 61-64).
   - `BedestenDocumentMarkdown` contains `documentId`, optional `markdown_content`, `source_url`, and `mime_type` (lines 87-91).

@@ -69,15 +69,25 @@ app = FastAPI(
 )
 
 
-@app.get("/health")
-async def health_check():
-    """Health check endpoint for monitoring"""
+def _health_payload():
     return {
         "status": "healthy",
         "service": "Yargı MCP Server",
         "version": "0.1.0",
         "tools_count": len(mcp_server._tool_manager._tools),
     }
+
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for monitoring"""
+    return _health_payload()
+
+
+@app.get("/health/")
+async def health_check_slash():
+    """Trailing-slash health check endpoint for proxy compatibility"""
+    return _health_payload()
 
 
 @app.api_route("/mcp", methods=["GET", "POST", "HEAD", "OPTIONS"])

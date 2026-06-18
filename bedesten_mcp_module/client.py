@@ -449,10 +449,15 @@ class BedestenApiClient:
             logger.info(f"BedestenApiClient: Mapped birimAdi '{original_birim_adi}' to '{mapped_birim_adi}'")
         
         try:
-            # Create request dict and remove birimAdi if empty
+            # Create request dict and remove fields intentionally left empty.
             request_dict = search_request.model_dump()
-            if not request_dict["data"]["birimAdi"]:  # Remove if empty string
-                del request_dict["data"]["birimAdi"]
+            request_data = request_dict["data"]
+            if "birimAdi" in request_data and not request_data["birimAdi"]:
+                del request_data["birimAdi"]
+            if "sortFields" in request_data and not request_data["sortFields"]:
+                del request_data["sortFields"]
+            if "sortDirection" in request_data and not request_data["sortDirection"]:
+                del request_data["sortDirection"]
 
             cache_key = self._cache_key("search", request_dict)
             cached_response = await self._cache_get_json(cache_key)

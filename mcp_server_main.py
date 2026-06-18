@@ -22,6 +22,7 @@ import os
 import time
 from collections import defaultdict
 from pydantic import HttpUrl, Field
+from starlette.responses import JSONResponse
 from typing import Optional, Dict, List, Literal, Any
 from fastmcp.server.middleware import Middleware, MiddlewareContext
 
@@ -349,6 +350,26 @@ app = FastMCP(
     name="Yargı MCP Server",
     version="0.1.6"
 )
+
+
+def _health_payload() -> Dict[str, Any]:
+    return {
+        "status": "healthy",
+        "service": "Yargı MCP Server",
+        "version": "0.1.6",
+    }
+
+
+@app.custom_route("/health", methods=["GET"])
+async def health_check(request):
+    """Health check endpoint available on the core FastMCP app."""
+    return JSONResponse(_health_payload())
+
+
+@app.custom_route("/health/", methods=["GET"])
+async def health_check_slash(request):
+    """Trailing-slash health check endpoint for proxy compatibility."""
+    return JSONResponse(_health_payload())
 
 # --- Health Check Functions (using individual clients) ---
 
@@ -1466,6 +1487,21 @@ if SEMANTIC_SEARCH_AVAILABLE:
     def _semantic_remaining_s(deadline: float) -> float:
         return max(0.0, deadline - time.monotonic())
 
+    def _semantic_year_to_iso(year_value: Any, *, end: bool = False) -> str:
+        if hasattr(year_value, "default"):
+            year_value = year_value.default
+        if year_value in (None, ""):
+            return ""
+        try:
+            year = int(year_value)
+        except (TypeError, ValueError):
+            raise ValueError("karar_yil_start and karar_yil_end must be four-digit years.")
+        if year < 1900 or year > 2100:
+            raise ValueError("karar_yil_start and karar_yil_end must be between 1900 and 2100.")
+        if end:
+            return f"{year}-12-31T23:59:59.999Z"
+        return f"{year}-01-01T00:00:00.000Z"
+
     def _court_type_value(court_type: Any) -> str:
         return getattr(court_type, "value", str(court_type))
 
@@ -1594,9 +1630,9 @@ if SEMANTIC_SEARCH_AVAILABLE:
     @app.tool(
         description=(
             "Use this to semantically re-rank a bounded candidate set of Turkish court decision records from Bedesten. "
-            "This is not a broad search tool: default scope is Yargıtay + Appeals Court decisions, max_candidates controls the Bedesten metadata search pageSize and document fetch cap, "
+            "This is not a broad search tool: default scope is Yargıtay + Appeals + Local Civil Court decisions, max_candidates controls the Bedesten metadata search pageSize and document fetch cap, "
             "and results is returned only after embedding re-ranking succeeds. Timeout/error responses use candidates_preview instead. "
-            "Set allow_broad_search=True only when intentionally searching 3+ court types; broad or concurrent semantic searches increase partial_timeout risk."
+            "Set allow_broad_search=True only when intentionally overriding the default with 3+ court types; broad or concurrent semantic searches increase partial_timeout risk."
         ),
         annotations={
             "readOnlyHint": True,
@@ -1632,16 +1668,20 @@ DOĞRU KULLANIM:
 YANLIŞ KULLANIM:
 • "muvazaa tapu iptal" (sadece kelimeler, cümle değil)
 • "kıdem tazminat hesap" (bağlamsız kelimeler)"""),
-        court_types: List[BedestenCourtTypeEnum] = Field(
-            default=["YARGITAYKARARI", "ISTINAFHUKUK"],
+        court_types: Optional[List[BedestenCourtTypeEnum]] = Field(
+            default=None,
             description=(
-                "Court types to search. Default is YARGITAYKARARI + ISTINAFHUKUK. "
-                "Use allow_broad_search=True when selecting 3+ court types."
+                "Court types to search. Default is YARGITAYKARARI + ISTINAFHUKUK + YERELHUKUK. "
+                "Allowed values: YARGITAYKARARI (Yargıtay), ISTINAFHUKUK (Bölge Adliye/İstinaf Hukuk), "
+                "YERELHUKUK (ilk derece hukuk mahkemeleri), DANISTAYKARAR (Danıştay/idari yargı), "
+                "KYB (kanun yararına bozma). Use allow_broad_search=True when explicitly overriding the default with 3+ court types."
             )
         ),
         top_k: int = Field(8, ge=1, le=20, description="Number of semantically ranked results to return (1-20). Must be <= max_candidates."),
         max_candidates: int = Field(8, ge=1, le=20, description="Candidate window size (1-20). The tool asks Bedesten for this many metadata results per court in one call, then fetches and embeds at most this many document bodies."),
-        allow_broad_search: bool = Field(False, description="Set true to allow searching 3 or more court types; this increases partial_timeout risk.")
+        allow_broad_search: bool = Field(False, description="Set true to allow searching 3 or more court types; this increases partial_timeout risk."),
+        karar_yil_start: str = Field("", description="Optional first decision year to include, e.g. '2020'. Maps to Bedesten kararTarihiStart."),
+        karar_yil_end: str = Field("", description="Optional last decision year to include, e.g. '2024'. Maps to Bedesten kararTarihiEnd.")
     ) -> Dict[str, Any]:
         """
         Perform bounded semantic re-ranking on Bedesten court decision records.
@@ -1650,12 +1690,16 @@ YANLIŞ KULLANIM:
         timeout_s = _semantic_float_env("SEMANTIC_SEARCH_TIMEOUT_S", 45.0, 15.0, 120.0)
         call_timeout_s = _semantic_float_env("SEMANTIC_CALL_TIMEOUT_S", 12.0, 3.0, 30.0)
         embedding_timeout_s = get_embedding_request_timeout_s()
-        if isinstance(court_types, str):
+        using_default_court_types = court_types in (None, [])
+        if using_default_court_types:
+            court_types = ["YARGITAYKARARI", "ISTINAFHUKUK", "YERELHUKUK"]
+        elif isinstance(court_types, str):
             court_types = [court_types]
         elif isinstance(court_types, tuple):
             court_types = list(court_types)
         elif not isinstance(court_types, list):
-            court_types = ["YARGITAYKARARI", "ISTINAFHUKUK"]
+            court_types = ["YARGITAYKARARI", "ISTINAFHUKUK", "YERELHUKUK"]
+            using_default_court_types = True
         if not isinstance(top_k, int):
             top_k = 8
         if not isinstance(max_candidates, int):
@@ -1664,6 +1708,27 @@ YANLIŞ KULLANIM:
             allow_broad_search = False
         deadline = start_time + timeout_s
         diagnostics = _semantic_base_diagnostics(court_types, max_candidates, top_k, timeout_s)
+        try:
+            karar_tarihi_start = _semantic_year_to_iso(karar_yil_start)
+            karar_tarihi_end = _semantic_year_to_iso(karar_yil_end, end=True)
+        except ValueError as e:
+            return _semantic_response(
+                "validation_error",
+                str(e),
+                diagnostics,
+                start_time,
+                query=query,
+                initial_keyword=initial_keyword,
+            )
+        if karar_tarihi_start and karar_tarihi_end and karar_tarihi_start > karar_tarihi_end:
+            return _semantic_response(
+                "validation_error",
+                "karar_yil_start must be less than or equal to karar_yil_end.",
+                diagnostics,
+                start_time,
+                query=query,
+                initial_keyword=initial_keyword,
+            )
 
         logger.info(
             "Semantic search tool called: initial_keyword=%r, top_k=%s, max_candidates=%s, court_types=%s",
@@ -1692,10 +1757,10 @@ YANLIŞ KULLANIM:
                 query=query,
                 initial_keyword=initial_keyword,
             )
-        if len(court_types) >= 3 and not allow_broad_search:
+        if len(court_types) >= 3 and not using_default_court_types and not allow_broad_search:
             return _semantic_response(
                 "validation_error",
-                "Selecting 3 or more court types requires allow_broad_search=True.",
+                "Explicitly selecting 3 or more court types requires allow_broad_search=True. Omit court_types to use the default Yargıtay + İstinaf Hukuk + Yerel Hukuk scope.",
                 diagnostics,
                 start_time,
                 query=query,
@@ -1720,7 +1785,9 @@ YANLIŞ KULLANIM:
                         itemTypeList=[court_type],
                         # Request the full bounded candidate window in one Bedesten call.
                         pageSize=min(100, max_candidates),
-                        pageNumber=1
+                        pageNumber=1,
+                        kararTarihiStart=karar_tarihi_start,
+                        kararTarihiEnd=karar_tarihi_end,
                     )
                 )
                 search_results = await asyncio.wait_for(
@@ -2362,9 +2429,7 @@ async def check_government_servers_health() -> Dict[str, Any]:
                 "pageSize": 5,
                 "pageNumber": 1,
                 "itemTypeList": ["YARGITAYKARARI"], 
-                "phrase": "karar",
-                "sortFields": ["KARAR_TARIHI"],
-                "sortDirection": "desc"
+                "phrase": "karar"
             },
             "applicationName": "UyapMevzuat",
             "paging": True

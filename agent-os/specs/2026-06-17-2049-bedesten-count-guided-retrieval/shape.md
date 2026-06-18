@@ -6,7 +6,7 @@ Add an experimental Bedesten count-guided retrieval spike and measurement harnes
 ## Key interfaces
 
 ### Existing Bedesten search request
-`BedestenSearchData(pageSize, pageNumber, itemTypeList, phrase, birimAdi, kararTarihiStart, kararTarihiEnd, sortFields, sortDirection)` is the request payload for Bedesten search. It supports page size, page number, court type filters, phrase syntax, chamber filter, date filters, and default date-desc sorting.
+`BedestenSearchData(pageSize, pageNumber, itemTypeList, phrase, birimAdi, kararTarihiStart, kararTarihiEnd, sortFields, sortDirection)` is the request payload for Bedesten search. It supports page size, page number, court type filters, phrase syntax, chamber filter, date filters, and optional explicit sorting.
 
 ### Existing Bedesten search response
 `BedestenSearchResponse.data` contains `emsalKararList`, `total`, and `start`. The new retrieval flow must treat `total` as corpus-level result count only, not as proof that any specific target decision is present.
