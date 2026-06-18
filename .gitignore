@@ -218,3 +218,4 @@ playwright_mcp_overhead.json
 simple_test.py
 analyze_anayasa_html.py
 CLAUDE.md
+/.claude/agent-memory
