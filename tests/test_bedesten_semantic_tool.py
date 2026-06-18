@@ -222,6 +222,35 @@ class BedestenSemanticToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response["status"], "validation_error")
         self.assertEqual(client.search_requests, [])
 
+    async def test_semantic_search_allows_explicit_default_court_scope_without_broad_flag(self):
+        original_client = mcp_server_main.bedesten_client_instance
+        original_get_embedder = mcp_server_main.get_embedder
+        client = RelevantAfterFirstTenBedestenClient()
+        mcp_server_main.bedesten_client_instance = client
+        mcp_server_main.get_embedder = lambda: KeywordEmbedder()
+        try:
+            response = await mcp_server_main.search_bedesten_semantic.fn(
+                initial_keyword='"alfa işlemi"',
+                query="Alfa işlemi sonrası beta zararı için tazminat sorumluluğu",
+                court_types=["YARGITAYKARARI", "ISTINAFHUKUK", "YERELHUKUK"],
+                top_k=1,
+                max_candidates=20,
+                allow_broad_search=False,
+            )
+        finally:
+            mcp_server_main.bedesten_client_instance = original_client
+            mcp_server_main.get_embedder = original_get_embedder
+
+        self.assertEqual(response["status"], "success")
+        requested_court_types = [
+            request.data.itemTypeList[0]
+            for request in client.search_requests
+        ]
+        self.assertEqual(
+            requested_court_types,
+            ["YARGITAYKARARI", "ISTINAFHUKUK", "YERELHUKUK"],
+        )
+
     async def test_default_sort_fields_are_omitted_from_bedesten_payload(self):
         from bedesten_mcp_module.client import BedestenApiClient
 

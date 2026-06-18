@@ -1391,6 +1391,8 @@ if os.getenv("BEDESTEN_COUNT_GUIDED_EXPERIMENTAL", "").strip() == "1":
 if SEMANTIC_SEARCH_AVAILABLE:
     from semantic_search.embedder import get_embedding_request_timeout_s
 
+    SEMANTIC_DEFAULT_COURT_TYPES = ["YARGITAYKARARI", "ISTINAFHUKUK", "YERELHUKUK"]
+
     @app.tool(
         description=(
             "Use this for deeper semantic legal research inside exactly ONE Bedesten court type. "
@@ -1701,13 +1703,19 @@ YANLIŞ KULLANIM:
         embedding_timeout_s = get_embedding_request_timeout_s()
         using_default_court_types = court_types in (None, [])
         if using_default_court_types:
-            court_types = ["YARGITAYKARARI", "ISTINAFHUKUK", "YERELHUKUK"]
+            court_types = list(SEMANTIC_DEFAULT_COURT_TYPES)
         elif isinstance(court_types, str):
             court_types = [court_types]
         elif isinstance(court_types, tuple):
             court_types = list(court_types)
         elif not isinstance(court_types, list):
-            court_types = ["YARGITAYKARARI", "ISTINAFHUKUK", "YERELHUKUK"]
+            court_types = list(SEMANTIC_DEFAULT_COURT_TYPES)
+            using_default_court_types = True
+        court_type_values = [_court_type_value(court_type) for court_type in court_types]
+        if (
+            len(court_type_values) == len(SEMANTIC_DEFAULT_COURT_TYPES)
+            and set(court_type_values) == set(SEMANTIC_DEFAULT_COURT_TYPES)
+        ):
             using_default_court_types = True
         if not isinstance(top_k, int):
             top_k = 8
@@ -1744,7 +1752,7 @@ YANLIŞ KULLANIM:
             initial_keyword,
             top_k,
             max_candidates,
-            [_court_type_value(court_type) for court_type in court_types],
+            court_type_values,
         )
 
         keyword = (initial_keyword or "").strip()
