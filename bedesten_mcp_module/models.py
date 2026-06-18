@@ -29,8 +29,8 @@ class BedestenSearchData(BaseModel):
         """)
     kararTarihiStart: Optional[str] = Field(None, description="Start date (ISO 8601 format)")
     kararTarihiEnd: Optional[str] = Field(None, description="End date (ISO 8601 format)")
-    sortFields: List[str] = Field(default=["KARAR_TARIHI"], description="Sort fields")
-    sortDirection: str = Field(default="desc", description="Sort direction (asc/desc)")
+    sortFields: List[str] = Field(default_factory=list, description="Optional sort fields. Omit unless a specific sort order is required.")
+    sortDirection: str = Field(default="", description="Optional sort direction (asc/desc). Omit unless a specific sort order is required.")
 
 class BedestenSearchRequest(BaseModel):
     data: BedestenSearchData

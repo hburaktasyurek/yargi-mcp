@@ -347,6 +347,8 @@ class BedestenDeepSemanticTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response["status"], "success")
         self.assertEqual(client.search_requests[0].data.pageSize, 50)
+        self.assertEqual(client.search_requests[0].data.sortFields, [])
+        self.assertEqual(client.search_requests[0].data.sortDirection, "")
         self.assertIn("relevant", client.fetched_ids)
         self.assertLessEqual(len(client.fetched_ids), 25)
         self.assertEqual(response["results"][0]["document_id"], "relevant")
@@ -387,6 +389,9 @@ class BedestenDeepSemanticTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response["status"], "embedding_error")
         self.assertEqual(response["results"], [])
         self.assertEqual(response["court_type"], "YARGITAYKARARI")
+        self.assertEqual(response["diagnostics"]["embedding_stage"], "query")
+        self.assertEqual(response["diagnostics"]["embedding_error_type"], "RuntimeError")
+        self.assertIn("embedding provider unavailable", response["diagnostics"]["embedding_error_message"])
 
 
 if __name__ == "__main__":

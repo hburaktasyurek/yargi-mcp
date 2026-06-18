@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 
-from mcp_server_main import create_app
+from mcp_server_main import create_app, get_service_version
 
 # Setup logging
 logger = logging.getLogger(__name__)
@@ -62,22 +62,32 @@ custom_middleware = [
 app = FastAPI(
     title="Yargı MCP Server",
     description="MCP server for Turkish legal databases",
-    version="0.1.0",
+    version=get_service_version(),
     middleware=custom_middleware,
     default_response_class=UTF8JSONResponse,
     redirect_slashes=False,
 )
 
 
-@app.get("/health")
-async def health_check():
-    """Health check endpoint for monitoring"""
+def _health_payload():
     return {
         "status": "healthy",
         "service": "Yargı MCP Server",
-        "version": "0.1.0",
+        "version": get_service_version(),
         "tools_count": len(mcp_server._tool_manager._tools),
     }
+
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for monitoring"""
+    return _health_payload()
+
+
+@app.get("/health/")
+async def health_check_slash():
+    """Trailing-slash health check endpoint for proxy compatibility"""
+    return _health_payload()
 
 
 @app.api_route("/mcp", methods=["GET", "POST", "HEAD", "OPTIONS"])

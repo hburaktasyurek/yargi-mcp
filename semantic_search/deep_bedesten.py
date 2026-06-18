@@ -17,6 +17,7 @@ from bedesten_mcp_module.models import (
     BedestenSearchData,
     BedestenSearchRequest,
 )
+from semantic_search.embedder import get_embedding_batch_size
 from semantic_search.processor import DocumentProcessor
 
 logger = logging.getLogger(__name__)
@@ -302,6 +303,10 @@ async def search_bedesten_deep_semantic(
         "chunk_count": 0,
         "embedding_model": getattr(embedder, "model", None),
         "provider": getattr(embedder, "provider", None),
+        "embedding_batch_size": get_embedding_batch_size(),
+        "embedding_error_type": None,
+        "embedding_error_message": None,
+        "embedding_stage": None,
         "total_ms": 0,
     }
 
@@ -460,14 +465,19 @@ async def search_bedesten_deep_semantic(
             results=[],
         )
 
+    embedding_stage = "query"
     try:
         query_embedding = _normalize_embeddings(
             await asyncio.to_thread(embedder.encode_query, question, "legal issue retrieval")
         )
+        embedding_stage = "documents"
         chunk_embeddings = _normalize_embeddings(
             await asyncio.to_thread(embedder.encode_documents, chunk_texts)
         )
     except Exception as e:
+        diagnostics["embedding_stage"] = embedding_stage
+        diagnostics["embedding_error_type"] = type(e).__name__
+        diagnostics["embedding_error_message"] = str(e)[:500]
         logger.warning("Deep semantic embedding failed: %s", e)
         return _semantic_response(
             "embedding_error",

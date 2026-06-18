@@ -221,10 +221,22 @@ Yargı MCP, **semantik arama** özelliği ile kararları anlamsal olarak sırala
 
 ### Semantik Arama Nasıl Çalışır?
 1. `initial_keyword` ile Bedesten API'den sınırlı aday kararlar çekilir
-2. Varsayılan olarak yalnızca `YARGITAYKARARI` ve `ISTINAFHUKUK` aranır
+2. Varsayılan olarak `YARGITAYKARARI`, `ISTINAFHUKUK` ve `YERELHUKUK` aranır
 3. En fazla `max_candidates` kararın tam metni alınır (varsayılan 8, üst sınır 20)
 4. `query` ile bu adaylar embedding modeli kullanılarak anlamsal olarak sıralanır
 5. Timeout veya embedding hatasında MCP çağrısı açık bırakılmaz; structured `partial_timeout` veya `embedding_error` response döner
+
+`search_bedesten_semantic` opsiyonel `karar_yil_start` / `karar_yil_end` parametrelerini kabul eder. Bu yıl aralığı Bedesten'e `kararTarihiStart` / `kararTarihiEnd` olarak gönderilir. Yıl değerleri 1900-2100 aralığında olmalıdır.
+
+`court_types` gönderilmezse hızlı semantik arama Yargıtay, istinaf hukuk ve yerel hukuk kararlarını kapsar. Varsayılan dışına çıkmak için `court_types` açıkça gönderilebilir:
+
+- `YARGITAYKARARI`: Yargıtay kararları.
+- `ISTINAFHUKUK`: Bölge adliye mahkemesi / istinaf hukuk kararları.
+- `YERELHUKUK`: İlk derece yerel hukuk mahkemesi kararları.
+- `DANISTAYKARAR`: Danıştay / idari yargı kararları; idare, vergi, kamu hukuku bağlamında kullanın.
+- `KYB`: Kanun yararına bozma kararları; özel olarak bu kaynak isteniyorsa kullanın.
+
+Varsayılan üçlü kapsam için `allow_broad_search` gerekmez. Ancak kullanıcı `court_types` ile açıkça 3 veya daha fazla kaynak seçerse `allow_broad_search=true` verilmelidir; bu geniş arama timeout ve rate limit riskini artırır.
 
 ### Önerilen Türkçe Kurulumu (Yerel — `multilingual-e5-large`)
 
@@ -311,6 +323,7 @@ API anahtarınızı [openrouter.ai/keys](https://openrouter.ai/keys) adresinden 
 | `SEMANTIC_CALL_TIMEOUT_S` | Her Bedesten search/fetch çağrısı için timeout (3-30 arası clamp edilir) | `12` |
 | `EMBEDDING_REQUEST_TIMEOUT_S` | Embedding API çağrısı timeout'u (5-60 arası clamp edilir) | `20` |
 | `EMBEDDING_MAX_RETRIES` | Embedding API retry sayısı (0-3 arası clamp edilir) | `1` |
+| `EMBEDDING_BATCH_SIZE` | Çoklu document/chunk embedding batch boyutu (1-128 arası clamp edilir) | `32` |
 | `BEDESTEN_DEEP_LEXICON_PATH` | Opsiyonel JSON hukuk kavram sözlüğü yolu (`name`, `triggers`, `terms`) | `/path/to/lexicon.json` |
 
 ### Deep Semantic Bedesten Search
